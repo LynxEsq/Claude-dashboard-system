@@ -11,18 +11,95 @@ Dashboard and CLI for monitoring and managing multiple Claude Code sessions runn
 - **Pipeline**: Inbox (Wishes) → AI Planning → Task Execution
 - Auto-discovery of Claude sessions in tmux
 - Persistent session mappings with restore after restart
+- **Cross-platform**: macOS, Linux, Windows (WSL)
+- **Remote access**: auto-detection of local/remote clients, SSH command generation
 
-## Quick Start
+## Installation
+
+### Requirements
+
+- **Node.js** 18+
+- **tmux** 3.0+
+- **Claude Code** CLI installed and authenticated
+
+### Option 1: Local machine (macOS / Linux)
 
 ```bash
+git clone https://github.com/LynxEsq/Claude-dashboard-system.git
+cd Claude-dashboard-system
+
 # Auto-install dependencies and launch
 ./start.sh
 
 # Or manually
 cd csm
 npm install
-node src/index.js web        # Dashboard at http://localhost:9847
+node src/index.js web
 ```
+
+Dashboard opens at http://localhost:9847
+
+### Option 2: Windows (WSL)
+
+```bash
+# Inside WSL (Ubuntu/Debian)
+git clone https://github.com/LynxEsq/Claude-dashboard-system.git
+cd Claude-dashboard-system/csm
+npm install
+
+# Local access only (default)
+node src/index.js web
+
+# Or allow access from Windows host browser
+node src/index.js web --host 0.0.0.0
+```
+
+Open `http://localhost:9847` in WSL or `http://<wsl-ip>:9847` from Windows browser.
+
+### Option 3: Remote dev station
+
+Run CSM on your dev server, access dashboard from any device on the network:
+
+```bash
+# On the server
+node src/index.js web --host 0.0.0.0
+
+# From your laptop — open in browser:
+# http://<server-ip>:9847
+```
+
+When accessing remotely, the "Terminal" button automatically switches to SSH mode — shows a copyable `ssh -t user@host "tmux attach -t session"` command instead of trying to open a local terminal window.
+
+## Configuration
+
+Stored at `~/.csm/config.json`:
+
+```json
+{
+  "port": 9847,
+  "host": "localhost",
+  "pollInterval": 3000,
+  "historyRetention": 30,
+  "alerts": {
+    "needsInputTimeout": 300,
+    "idleTimeout": 600,
+    "tokenThreshold": 80
+  },
+  "sessions": []
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `port` | 9847 | Web server port |
+| `host` | `localhost` | Bind address. Set to `0.0.0.0` for remote access |
+| `pollInterval` | 3000 | tmux polling interval (ms) |
+| `historyRetention` | 30 | Days to keep history |
+| `alerts.needsInputTimeout` | 300 | Seconds before "needs input" alert |
+| `alerts.idleTimeout` | 600 | Seconds before idle alert |
+| `alerts.tokenThreshold` | 80 | Token usage % for alert |
+
+> **Security note**: When `host` is set to `0.0.0.0`, the server is accessible from the network without authentication. Use in trusted networks only.
 
 ## Architecture
 
@@ -46,6 +123,7 @@ node src/index.js web        # Dashboard at http://localhost:9847
 - **Monitor**: EventEmitter, polls tmux panes, detects status via regex
 - **Web Server**: Express + WebSocket (ws), REST API + real-time updates
 - **Database**: SQLite3 (better-sqlite3, WAL mode)
+- **Platform**: Auto-detects macOS, Linux, WSL (`csm/src/lib/platform.js`)
 
 ### Frontend
 - Vanilla JS SPA, no frameworks
@@ -61,7 +139,8 @@ csm add <name> <tmux-session>    # Register session
   [--window W] [--pane P] [--dir PATH]
 csm remove <name>                 # Remove session
 csm list                          # List all configured sessions
-csm web [--port 9847] [--no-open] # Start web dashboard
+csm web [-p PORT] [-H HOST]      # Start web dashboard
+  [--no-open]                     #   --host 0.0.0.0 for remote access
 csm send <name> <input...>        # Send text input to session
 csm focus <name>                  # Switch tmux focus to session
 csm discover [--cleanup]          # Find Claude sessions in tmux
@@ -84,9 +163,25 @@ csm config [--show] [--set K=V]   # View/edit configuration
 | **Terminal** | Live terminal output, raw key buttons, text input |
 
 ### Modals
-- **Create Project** — name, path, auto-start Claude option
+- **Create Project** — name, project path with directory browser, auto-start Claude option
+- **Project Settings** — view/edit name, tmux session, project path; list of all tmux sessions (main + tasks) with status and attach buttons
+- **Directory Browser** — navigate filesystem, git repo and CLAUDE.md indicators, double-click to enter directories
 - **Add Manual Task** — title, description, priority
 - **Permissions** — quick presets + custom permission input
+- **SSH Command** (remote) — copyable SSH command to attach to tmux session
+
+### Cross-platform Terminal Button
+
+The "Terminal" button adapts to the environment:
+
+| Platform | Behavior |
+|----------|----------|
+| **macOS** | Opens Terminal.app with `tmux attach` |
+| **WSL** | Opens Windows Terminal (or cmd.exe fallback) |
+| **Linux** | Tries gnome-terminal, konsole, xfce4-terminal, xterm |
+| **Remote access** | Shows SSH command modal with copy button |
+
+Remote vs local detection is automatic based on client IP address.
 
 ## Pipeline System
 
@@ -149,7 +244,8 @@ Base URL: `http://localhost:9847`
 | POST | `/api/sessions/:name/send` | Send text input |
 | POST | `/api/sessions/:name/keys` | Send raw tmux keys |
 | POST | `/api/sessions/:name/focus` | Switch tmux focus |
-| POST | `/api/sessions/:name/terminal` | Open in Terminal.app |
+| POST | `/api/sessions/:name/terminal` | Open in native terminal (cross-platform) |
+| GET | `/api/sessions/:name/tmux-sessions` | List all tmux sessions for project (main + tasks) |
 | POST | `/api/sessions/:name/restart` | Ctrl+C + restart Claude |
 | POST | `/api/sessions/:name/kill` | Kill tmux session |
 | POST | `/api/sessions/:name/destroy` | Full cleanup (kill, remove config, clean DB) |
@@ -160,6 +256,14 @@ Base URL: `http://localhost:9847`
 |--------|----------|-------------|
 | GET | `/api/sessions/:name/permissions` | Read project permissions |
 | POST | `/api/sessions/:name/permissions` | Update project permissions |
+
+### Platform & Access
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/platform` | Server OS and terminal info |
+| GET | `/api/access-info` | Local/remote detection, SSH connection details |
+| GET | `/api/fs/list?path=...` | Browse directories (for directory picker) |
 
 ### History
 
@@ -272,33 +376,6 @@ Tasks can be isolated in separate git worktrees to avoid conflicts:
 - Branch naming: `csm/task-{taskId}`
 - Auto-creation and cleanup
 
-## Configuration
-
-Stored at `~/.csm/config.json`:
-
-```json
-{
-  "port": 9847,
-  "pollInterval": 3000,
-  "historyRetention": 30,
-  "alerts": {
-    "needsInputTimeout": 300,
-    "idleTimeout": 600,
-    "tokenThreshold": 80
-  },
-  "sessions": []
-}
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `port` | 9847 | Web server port |
-| `pollInterval` | 3000 | tmux polling interval (ms) |
-| `historyRetention` | 30 | Days to keep history |
-| `alerts.needsInputTimeout` | 300 | Seconds before "needs input" alert |
-| `alerts.idleTimeout` | 600 | Seconds before idle alert |
-| `alerts.tokenThreshold` | 80 | Token usage % for alert |
-
 ## Data Storage
 
 | File | Location | Content |
@@ -331,6 +408,7 @@ Stored at `~/.csm/config.json`:
 | Database | better-sqlite3 (WAL mode) |
 | Terminal | tmux |
 | Frontend | Vanilla JS, CSS Grid |
+| Platform | macOS, Linux, WSL |
 
 ## License
 

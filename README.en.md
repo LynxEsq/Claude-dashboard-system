@@ -11,15 +11,9 @@ A single control center for all your Claude Code sessions. Monitoring, tasks, pi
 
 ---
 
-## Screenshots
+## Demo
 
-| Dashboard | Pipeline |
-|-----------|----------|
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Pipeline](docs/screenshots/pipeline.png) |
-
-| Terminal | Statuses |
-|----------|----------|
-| ![Terminal](docs/screenshots/terminal.png) | ![Statuses](docs/screenshots/statuses.png) |
+![CSM Demo](docs/screenshots/demo.gif)
 
 ---
 

@@ -11,15 +11,9 @@
 
 ---
 
-## Скриншоты
+## Демо
 
-| Дашборд | Pipeline |
-|---------|----------|
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Pipeline](docs/screenshots/pipeline.png) |
-
-| Терминал | Статусы |
-|----------|---------|
-| ![Terminal](docs/screenshots/terminal.png) | ![Statuses](docs/screenshots/statuses.png) |
+![CSM Demo](docs/screenshots/demo.gif)
 
 ---
 

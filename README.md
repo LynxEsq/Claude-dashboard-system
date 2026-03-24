@@ -5,7 +5,7 @@
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
 ![tmux](https://img.shields.io/badge/tmux-required-1BB91F?logo=tmux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL-lightgrey)
 
 > **[English version](README.en.md)**
 
@@ -126,16 +126,15 @@ CSM отправляет алерты если сессия в статусе **
 
 ---
 
-## Быстрый старт
+## Установка
 
 ### Требования
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — установлен и авторизован (`claude` доступен в терминале). CSM управляет сессиями Claude Code, поэтому без него работать не будет
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — установлен и авторизован (`claude` доступен в терминале)
 - **Node.js** 18+
 - **tmux** (установлен и запущен)
-- **macOS** или **Linux**
 
-### Установка
+### Вариант 1: macOS / Linux
 
 ```bash
 git clone https://github.com/LynxEsq/Claude-dashboard-system.git
@@ -143,15 +142,46 @@ cd Claude-dashboard-system
 bash start.sh
 ```
 
-Скрипт `start.sh` проверит зависимости (Homebrew, Node.js, tmux), установит npm-пакеты и запустит дашборд.
+Скрипт `start.sh` проверит зависимости (Homebrew, Node.js, tmux), установит npm-пакеты и запустит дашборд на http://localhost:9847.
 
-### Ручная установка
+**Ручная установка:**
+```bash
+cd csm && npm install
+node src/index.js web
+```
+
+### Вариант 2: Windows (WSL)
 
 ```bash
-cd csm
+# Внутри WSL (Ubuntu/Debian)
+git clone https://github.com/LynxEsq/Claude-dashboard-system.git
+cd Claude-dashboard-system/csm
 npm install
-node src/index.js web    # дашборд на http://localhost:9847
+
+# Только локальный доступ
+node src/index.js web
+
+# Или с доступом из браузера Windows
+node src/index.js web --host 0.0.0.0
 ```
+
+Кнопка «Terminal» на WSL автоматически открывает Windows Terminal (или cmd.exe как fallback).
+
+### Вариант 3: Удалённая dev-станция
+
+Запустите CSM на сервере, откройте дашборд с любого устройства в сети:
+
+```bash
+# На сервере
+node src/index.js web --host 0.0.0.0
+
+# С ноутбука — откройте в браузере:
+# http://<ip-сервера>:9847
+```
+
+При удалённом доступе CSM автоматически определяет что клиент подключился по сети и переключает кнопку «Terminal» в SSH-режим — показывает копируемую команду `ssh -t user@host "tmux attach -t session"` вместо попытки открыть окно терминала на сервере.
+
+> **Безопасность**: при `--host 0.0.0.0` сервер доступен из сети без аутентификации. Используйте только в доверенных сетях.
 
 ### Глобальная команда (опционально)
 
@@ -177,6 +207,8 @@ bash csm/templates/setup.sh
 csm status                           # статус всех сессий
 csm status --watch                   # автообновление каждые 3 секунды
 csm web                              # запустить веб-дашборд
+csm web --host 0.0.0.0              # с доступом из сети
+csm web --port 3000                  # на другом порту
 
 # Управление сессиями
 csm add <name> <tmux-session>        # добавить сессию в мониторинг
@@ -195,6 +227,39 @@ csm config --show                    # показать настройки
 
 ---
 
+## Веб-дашборд
+
+4-колоночный layout:
+
+| Колонка | Содержимое |
+|---------|-----------|
+| **Projects** | Список сессий с индикаторами статуса, полосками токенов, состоянием планирования |
+| **Inbox** | Текстовое поле для wishes, список wishes с редактированием/удалением |
+| **Tasks** | Список задач по статусам, кнопки Plan и Run, режимы выполнения |
+| **Terminal** | Live-вывод терминала с ANSI-цветами, кнопки raw keys, текстовый ввод |
+
+### Модальные окна
+
+- **Create Project** — имя, путь с браузером каталогов, автозапуск Claude
+- **Project Settings** — tmux-сессия, путь проекта, список всех связанных tmux-сессий (основная + задачи) со статусами и кнопками подключения
+- **Directory Browser** — навигация по файловой системе, индикаторы git-репозитория и CLAUDE.md
+- **Add Manual Task** — заголовок, описание, приоритет
+- **Permissions** — быстрые пресеты + ручной ввод разрешений Claude Code
+- **SSH Command** (при удалённом доступе) — копируемая SSH-команда для подключения
+
+### Кросс-платформенная кнопка Terminal
+
+| Платформа | Поведение |
+|-----------|----------|
+| **macOS** | Открывает Terminal.app с `tmux attach` |
+| **WSL** | Открывает Windows Terminal (fallback: cmd.exe) |
+| **Linux** | gnome-terminal / konsole / xfce4-terminal / xterm |
+| **Удалённо** | Модалка с SSH-командой и кнопкой Copy |
+
+Определение платформы и локальности происходит автоматически.
+
+---
+
 ## Конфигурация
 
 Настройки хранятся в `~/.csm/config.json`:
@@ -202,6 +267,7 @@ csm config --show                    # показать настройки
 ```json
 {
   "port": 9847,
+  "host": "localhost",
   "pollInterval": 3000,
   "historyRetention": 30,
   "alerts": {
@@ -215,6 +281,7 @@ csm config --show                    # показать настройки
 | Параметр | По умолчанию | Описание |
 |----------|-------------|----------|
 | `port` | `9847` | Порт веб-дашборда |
+| `host` | `localhost` | Адрес привязки. `0.0.0.0` для доступа из сети |
 | `pollInterval` | `3000` | Интервал опроса tmux (мс) |
 | `historyRetention` | `30` | Дней хранения истории |
 | `alerts.needsInputTimeout` | `300` | Секунд до алерта "Needs Input" |
@@ -225,23 +292,54 @@ csm config --show                    # показать настройки
 
 ## API
 
-Веб-сервер предоставляет REST API и WebSocket-соединение на порту `9847`.
+Веб-сервер предоставляет REST API и WebSocket-соединение.
 
-### REST
+### REST — основные эндпоинты
 
 | Метод | Endpoint | Описание |
 |-------|----------|----------|
 | `GET` | `/api/sessions` | Все сессии и их состояние |
-| `POST` | `/api/sessions/:name/send` | Отправить текст в сессию |
-| `POST` | `/api/sessions/:name/focus` | Переключить tmux-фокус |
 | `POST` | `/api/sessions/create` | Создать новую сессию |
-| `POST` | `/api/sessions/:name/kill` | Завершить сессию |
+| `POST` | `/api/sessions/:name/send` | Отправить текст в сессию |
+| `POST` | `/api/sessions/:name/keys` | Отправить raw tmux keys |
+| `POST` | `/api/sessions/:name/focus` | Переключить tmux-фокус |
+| `POST` | `/api/sessions/:name/terminal` | Открыть терминал (кросс-платформенно) |
+| `GET` | `/api/sessions/:name/tmux-sessions` | Все tmux-сессии проекта (основная + задачи) |
+| `POST` | `/api/sessions/:name/restart` | Перезапустить Claude |
+| `POST` | `/api/sessions/:name/destroy` | Полная очистка проекта |
+
+### REST — pipeline
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
 | `GET` | `/api/pipeline/:name/wishes` | Список wishes |
 | `POST` | `/api/pipeline/:name/wishes` | Создать wish |
 | `POST` | `/api/pipeline/:name/plan` | Запустить AI-планирование |
-| `POST` | `/api/pipeline/:name/execute` | Выполнить следующую задачу |
-| `GET` | `/api/history/:name/status` | История статусов (24ч) |
+| `GET` | `/api/pipeline/:name/plan/status` | Прогресс планирования |
+| `POST` | `/api/pipeline/:name/apply-plan` | Применить план |
+| `GET` | `/api/pipeline/:name/tasks` | Получить задачи |
+| `POST` | `/api/pipeline/:name/tasks` | Создать задачу |
+| `POST` | `/api/pipeline/:name/execute-interactive` | Выполнить задачу интерактивно |
+| `POST` | `/api/pipeline/:name/execute-silent` | Выполнить задачу тихо |
+| `GET` | `/api/pipeline/:name/task-status/:taskId` | Статус выполнения |
+
+### REST — платформа и файловая система
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| `GET` | `/api/platform` | ОС сервера и тип терминала |
+| `GET` | `/api/access-info` | Детекция local/remote, SSH-данные |
+| `GET` | `/api/fs/list?path=...` | Обзор каталогов |
+
+### REST — прочее
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| `GET` | `/api/sessions/:name/permissions` | Разрешения Claude Code |
+| `POST` | `/api/sessions/:name/permissions` | Обновить разрешения |
+| `GET` | `/api/history/:name/status` | История статусов |
 | `GET` | `/api/alerts` | Неподтверждённые алерты |
+| `GET` | `/api/tmux/sessions` | Все tmux-сессии (tracked / untracked) |
 
 ### WebSocket
 
@@ -249,9 +347,7 @@ csm config --show                    # показать настройки
 ws://localhost:9847
 ```
 
-Типы сообщений: `update`, `statusChange`, `alert`, `taskStarted`, `wishAdded`, `planApplied`.
-
-Подробная документация API: [`csm/README.md`](csm/README.md)
+Типы сообщений: `state`, `update`, `statusChange`, `alert`, `taskStarted`, `taskCreated`, `wishAdded`, `planStarted`, `planFinished`, `planApplied`.
 
 ---
 
@@ -267,6 +363,7 @@ csm/
 │   │   ├── history.js        # SQLite: логи, токены, алерты
 │   │   ├── monitor.js        # Polling loop, EventEmitter
 │   │   ├── pipeline.js       # Wishes → Tasks → Execution
+│   │   ├── platform.js       # Детекция ОС: macOS, Linux, WSL
 │   │   └── tmux.js           # Обёртка над tmux CLI
 │   └── web/
 │       └── server.js         # Express + WebSocket
@@ -287,8 +384,9 @@ csm/
 | Frontend | Vanilla JS, CSS Grid |
 | CLI | commander.js, chalk |
 | Терминал | tmux (execSync) |
+| Платформа | macOS, Linux, WSL |
 
-Данные хранятся в `~/.csm/`: `config.json`, `history.db`, `pipeline.db`.
+Данные хранятся в `~/.csm/`: `config.json`, `history.db`, `pipeline.db`, `worktrees/`.
 
 ---
 

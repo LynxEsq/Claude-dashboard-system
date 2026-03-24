@@ -5,7 +5,7 @@ A single control center for all your Claude Code sessions. Monitoring, tasks, pi
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
 ![tmux](https://img.shields.io/badge/tmux-required-1BB91F?logo=tmux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL-lightgrey)
 
 > **[Русская версия](README.md)**
 
@@ -126,16 +126,15 @@ You don't have to use the full pipeline. You can simply monitor sessions and sen
 
 ---
 
-## Quick start
+## Installation
 
 ### Requirements
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — installed and authenticated (`claude` available in terminal). CSM manages Claude Code sessions, so it won't work without it
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — installed and authenticated (`claude` available in terminal)
 - **Node.js** 18+
 - **tmux** (installed and running)
-- **macOS** or **Linux**
 
-### Installation
+### Option 1: macOS / Linux
 
 ```bash
 git clone https://github.com/LynxEsq/Claude-dashboard-system.git
@@ -143,15 +142,46 @@ cd Claude-dashboard-system
 bash start.sh
 ```
 
-The `start.sh` script checks dependencies (Homebrew, Node.js, tmux), installs npm packages, and launches the dashboard.
+The `start.sh` script checks dependencies (Homebrew, Node.js, tmux), installs npm packages, and launches the dashboard at http://localhost:9847.
 
-### Manual installation
+**Manual installation:**
+```bash
+cd csm && npm install
+node src/index.js web
+```
+
+### Option 2: Windows (WSL)
 
 ```bash
-cd csm
+# Inside WSL (Ubuntu/Debian)
+git clone https://github.com/LynxEsq/Claude-dashboard-system.git
+cd Claude-dashboard-system/csm
 npm install
-node src/index.js web    # dashboard at http://localhost:9847
+
+# Local access only
+node src/index.js web
+
+# Or allow access from Windows host browser
+node src/index.js web --host 0.0.0.0
 ```
+
+The "Terminal" button on WSL automatically opens Windows Terminal (or cmd.exe as fallback).
+
+### Option 3: Remote dev station
+
+Run CSM on your server, access the dashboard from any device on the network:
+
+```bash
+# On the server
+node src/index.js web --host 0.0.0.0
+
+# From your laptop — open in browser:
+# http://<server-ip>:9847
+```
+
+When accessing remotely, CSM automatically detects that the client connected over the network and switches the "Terminal" button to SSH mode — showing a copyable `ssh -t user@host "tmux attach -t session"` command instead of trying to open a terminal window on the server.
+
+> **Security note**: With `--host 0.0.0.0` the server is accessible from the network without authentication. Use in trusted networks only.
 
 ### Global command (optional)
 
@@ -177,6 +207,8 @@ bash csm/templates/setup.sh
 csm status                           # all session statuses
 csm status --watch                   # auto-refresh every 3 seconds
 csm web                              # start web dashboard
+csm web --host 0.0.0.0              # with network access
+csm web --port 3000                  # on a different port
 
 # Session management
 csm add <name> <tmux-session>        # add session to monitoring
@@ -195,6 +227,39 @@ csm config --show                    # show settings
 
 ---
 
+## Web Dashboard
+
+4-column layout:
+
+| Column | Content |
+|--------|---------|
+| **Projects** | Session list with status indicators, token usage bars, planning state |
+| **Inbox** | Textarea for wishes, wish list with edit/delete |
+| **Tasks** | Task list by status, Plan and Run buttons, execution modes |
+| **Terminal** | Live terminal output with ANSI colors, raw key buttons, text input |
+
+### Modals
+
+- **Create Project** — name, path with directory browser, auto-start Claude
+- **Project Settings** — tmux session, project path, list of all related tmux sessions (main + tasks) with status and attach buttons
+- **Directory Browser** — filesystem navigation, git repo and CLAUDE.md indicators
+- **Add Manual Task** — title, description, priority
+- **Permissions** — quick presets + custom Claude Code permission input
+- **SSH Command** (remote access) — copyable SSH command for connecting
+
+### Cross-platform Terminal button
+
+| Platform | Behavior |
+|----------|----------|
+| **macOS** | Opens Terminal.app with `tmux attach` |
+| **WSL** | Opens Windows Terminal (fallback: cmd.exe) |
+| **Linux** | gnome-terminal / konsole / xfce4-terminal / xterm |
+| **Remote** | SSH command modal with Copy button |
+
+Platform and locality detection is automatic.
+
+---
+
 ## Configuration
 
 Settings are stored in `~/.csm/config.json`:
@@ -202,6 +267,7 @@ Settings are stored in `~/.csm/config.json`:
 ```json
 {
   "port": 9847,
+  "host": "localhost",
   "pollInterval": 3000,
   "historyRetention": 30,
   "alerts": {
@@ -215,6 +281,7 @@ Settings are stored in `~/.csm/config.json`:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `port` | `9847` | Web dashboard port |
+| `host` | `localhost` | Bind address. `0.0.0.0` for network access |
 | `pollInterval` | `3000` | tmux polling interval (ms) |
 | `historyRetention` | `30` | Days to keep history |
 | `alerts.needsInputTimeout` | `300` | Seconds before "Needs Input" alert |
@@ -225,23 +292,54 @@ Settings are stored in `~/.csm/config.json`:
 
 ## API
 
-The web server provides a REST API and WebSocket connection on port `9847`.
+The web server provides a REST API and WebSocket connection.
 
-### REST
+### REST — core endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/sessions` | All sessions and their state |
-| `POST` | `/api/sessions/:name/send` | Send text to session |
-| `POST` | `/api/sessions/:name/focus` | Switch tmux focus |
 | `POST` | `/api/sessions/create` | Create new session |
-| `POST` | `/api/sessions/:name/kill` | Kill session |
+| `POST` | `/api/sessions/:name/send` | Send text to session |
+| `POST` | `/api/sessions/:name/keys` | Send raw tmux keys |
+| `POST` | `/api/sessions/:name/focus` | Switch tmux focus |
+| `POST` | `/api/sessions/:name/terminal` | Open terminal (cross-platform) |
+| `GET` | `/api/sessions/:name/tmux-sessions` | All project tmux sessions (main + tasks) |
+| `POST` | `/api/sessions/:name/restart` | Restart Claude |
+| `POST` | `/api/sessions/:name/destroy` | Full project cleanup |
+
+### REST — pipeline
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | `GET` | `/api/pipeline/:name/wishes` | List wishes |
 | `POST` | `/api/pipeline/:name/wishes` | Create wish |
 | `POST` | `/api/pipeline/:name/plan` | Run AI planning |
-| `POST` | `/api/pipeline/:name/execute` | Execute next task |
-| `GET` | `/api/history/:name/status` | Status history (24h) |
+| `GET` | `/api/pipeline/:name/plan/status` | Planning progress |
+| `POST` | `/api/pipeline/:name/apply-plan` | Apply plan |
+| `GET` | `/api/pipeline/:name/tasks` | Get tasks |
+| `POST` | `/api/pipeline/:name/tasks` | Create task |
+| `POST` | `/api/pipeline/:name/execute-interactive` | Execute task interactively |
+| `POST` | `/api/pipeline/:name/execute-silent` | Execute task silently |
+| `GET` | `/api/pipeline/:name/task-status/:taskId` | Execution status |
+
+### REST — platform & filesystem
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/platform` | Server OS and terminal type |
+| `GET` | `/api/access-info` | Local/remote detection, SSH details |
+| `GET` | `/api/fs/list?path=...` | Browse directories |
+
+### REST — other
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sessions/:name/permissions` | Claude Code permissions |
+| `POST` | `/api/sessions/:name/permissions` | Update permissions |
+| `GET` | `/api/history/:name/status` | Status history |
 | `GET` | `/api/alerts` | Unacknowledged alerts |
+| `GET` | `/api/tmux/sessions` | All tmux sessions (tracked / untracked) |
 
 ### WebSocket
 
@@ -249,9 +347,7 @@ The web server provides a REST API and WebSocket connection on port `9847`.
 ws://localhost:9847
 ```
 
-Message types: `update`, `statusChange`, `alert`, `taskStarted`, `wishAdded`, `planApplied`.
-
-Full API documentation: [`csm/README.md`](csm/README.md)
+Message types: `state`, `update`, `statusChange`, `alert`, `taskStarted`, `taskCreated`, `wishAdded`, `planStarted`, `planFinished`, `planApplied`.
 
 ---
 
@@ -267,6 +363,7 @@ csm/
 │   │   ├── history.js        # SQLite: logs, tokens, alerts
 │   │   ├── monitor.js        # Polling loop, EventEmitter
 │   │   ├── pipeline.js       # Wishes → Tasks → Execution
+│   │   ├── platform.js       # OS detection: macOS, Linux, WSL
 │   │   └── tmux.js           # tmux CLI wrapper
 │   └── web/
 │       └── server.js         # Express + WebSocket
@@ -287,8 +384,9 @@ csm/
 | Frontend | Vanilla JS, CSS Grid |
 | CLI | commander.js, chalk |
 | Terminal | tmux (execSync) |
+| Platform | macOS, Linux, WSL |
 
-Data is stored in `~/.csm/`: `config.json`, `history.db`, `pipeline.db`.
+Data is stored in `~/.csm/`: `config.json`, `history.db`, `pipeline.db`, `worktrees/`.
 
 ---
 

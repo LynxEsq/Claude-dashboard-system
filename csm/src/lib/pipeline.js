@@ -655,8 +655,10 @@ function getTaskExecStatus(sessionName, taskId) {
 
   // Check if tmux session still exists
   if (!tmux.sessionExists(exec.tmuxSession)) {
+    endSessionMapping(taskId);
+    updateTaskStatus(taskId, 'completed', 'Session ended (tmux session disappeared)');
     activeExecs.delete(taskId);
-    return { status: 'unknown', reason: 'Session disappeared' };
+    return { status: 'completed', reason: 'Session ended' };
   }
 
   // Interactive mode — show live pane; detect if Claude has finished (prompt visible)
@@ -715,7 +717,8 @@ function getTaskExecStatus(sessionName, taskId) {
   // Silent done
   const cleanOutput = cleanAnsi(output.replace('___CSM_EXEC_DONE___', ''));
   updateTaskStatus(taskId, 'completed', cleanOutput.substring(0, 2000));
-  completeExecution(exec.execId, 'completed', cleanOutput.substring(0, 2000));
+  if (exec.execId) completeExecution(exec.execId, 'completed', cleanOutput.substring(0, 2000));
+  endSessionMapping(taskId);
   tmux.killSession(exec.tmuxSession);
   activeExecs.delete(taskId);
 

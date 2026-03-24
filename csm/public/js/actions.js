@@ -113,14 +113,17 @@ function clearWishSelection() {
   renderTasks();
 }
 
+function safeParseIds(str) {
+  if (!str) return [];
+  try { return JSON.parse(str); } catch { return []; }
+}
+
 function getLinkedTaskIds(wish) {
-  if (!wish || !wish.task_ids) return [];
-  try { return JSON.parse(wish.task_ids); } catch { return []; }
+  return safeParseIds(wish?.task_ids);
 }
 
 function getLinkedWishIds(task) {
-  if (!task || !task.wish_ids) return [];
-  try { return JSON.parse(task.wish_ids); } catch { return []; }
+  return safeParseIds(task?.wish_ids);
 }
 
 // ─── Data Loading ────────────────────────────────

@@ -2,10 +2,13 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
+const fs = require('fs');
+const { execSync } = require('child_process');
 const SessionMonitor = require('../lib/monitor');
 const history = require('../lib/history');
 const config = require('../lib/config');
 const tmux = require('../lib/tmux');
+const { PIPELINE_SESSION_RE } = require('../lib/utils');
 
 let monitor = null;
 
@@ -123,7 +126,7 @@ function start(port = 9847, autoOpen = true) {
 
   // Kill tmux session + remove from CSM
   app.post('/api/sessions/:name/kill', safe((req, res) => {
-    const sess = config.listSessions().find(s => s.name === req.params.name);
+    const sess = config.findSession(req.params.name);
     if (!sess) return res.status(404).json({ error: 'Session not found' });
 
     tmux.killSession(sess.tmuxSession);
@@ -135,18 +138,18 @@ function start(port = 9847, autoOpen = true) {
   // Full project delete: kill tmux, remove config, clean DB
   app.post('/api/sessions/:name/destroy', safe((req, res) => {
     const name = req.params.name;
-    const sess = config.listSessions().find(s => s.name === name);
+    const sess = config.findSession(name);
 
     // Kill main tmux session
     if (sess) {
       tmux.killSession(sess.tmuxSession);
     }
 
-    // Kill any related tmux sessions (planning, execution)
+    // Kill any related tmux sessions (planning, execution, interactive tasks)
     const allTmux = tmux.listTmuxSessions();
     const safeName = tmux.safeTmuxName(name);
     for (const s of allTmux) {
-      if (s.startsWith(`csm-plan-${safeName}`) || s.startsWith(`csm-exec-${safeName}`)) {
+      if (s.startsWith(`csm-plan-${safeName}`) || s.startsWith(`csm-exec-${safeName}`) || s.startsWith(`csm-task-${safeName}`)) {
         tmux.killSession(s);
       }
     }
@@ -165,10 +168,9 @@ function start(port = 9847, autoOpen = true) {
 
   // Restart claude in a session
   app.post('/api/sessions/:name/restart', safe((req, res) => {
-    const sess = config.listSessions().find(s => s.name === req.params.name);
+    const sess = config.findSession(req.params.name);
     if (!sess) return res.status(404).json({ error: 'Session not found' });
 
-    const { execSync } = require('child_process');
     const target = sess.tmuxSession;
     execSync(`tmux send-keys -t "${target}" C-c`, { timeout: 5000 });
     setTimeout(() => {
@@ -181,13 +183,12 @@ function start(port = 9847, autoOpen = true) {
 
   // Send raw keys (Enter, Ctrl+C, arrows, etc.) to a session
   app.post('/api/sessions/:name/keys', safe((req, res) => {
-    const sess = config.listSessions().find(s => s.name === req.params.name);
+    const sess = config.findSession(req.params.name);
     if (!sess) return res.status(404).json({ error: 'Session not found' });
 
     const { keys } = req.body;
     if (!keys) return res.status(400).json({ error: 'keys is required' });
 
-    const { execSync } = require('child_process');
     const target = tmux.buildTarget
       ? tmux.buildTarget(sess.tmuxSession, sess.tmuxWindow, sess.tmuxPane)
       : sess.tmuxSession;
@@ -206,12 +207,11 @@ function start(port = 9847, autoOpen = true) {
   app.post('/api/sessions/:name/terminal', safe((req, res) => {
     let tmuxName = req.body?.tmux || req.query?.tmux;
     if (!tmuxName) {
-      const sess = config.listSessions().find(s => s.name === req.params.name);
+      const sess = config.findSession(req.params.name);
       if (!sess) return res.status(404).json({ error: 'Session not found' });
       tmuxName = sess.tmuxSession;
     }
 
-    const { execSync } = require('child_process');
     try {
       const script = `tell application "Terminal"
         activate
@@ -233,6 +233,25 @@ function start(port = 9847, autoOpen = true) {
       tracked: all.filter(s => tracked.has(s)),
       untracked: all.filter(s => !tracked.has(s)),
     });
+  }));
+
+  // Kill a specific tmux session by name
+  app.post('/api/tmux/kill', safe((req, res) => {
+    const { tmuxSession } = req.body;
+    if (!tmuxSession) return res.status(400).json({ error: 'tmuxSession is required' });
+    const ok = tmux.killSession(tmuxSession);
+    res.json({ success: ok });
+  }));
+
+  // Kill all orphaned pipeline sessions (csm-task-*, csm-plan-*, csm-exec-*)
+  app.post('/api/tmux/cleanup-pipeline', safe((req, res) => {
+    const all = tmux.listTmuxSessions();
+    const pipelineSessions = all.filter(s => PIPELINE_SESSION_RE.test(s));
+    let killed = 0;
+    for (const s of pipelineSessions) {
+      if (tmux.killSession(s)) killed++;
+    }
+    res.json({ success: true, killed, total: pipelineSessions.length });
   }));
 
   // ─── Pipeline API ──────────────────────────────────────
@@ -357,7 +376,7 @@ function start(port = 9847, autoOpen = true) {
   // ─── Permissions API ────────────────────────────────
 
   app.get('/api/sessions/:name/permissions', safe((req, res) => {
-    const sess = config.listSessions().find(s => s.name === req.params.name);
+    const sess = config.findSession(req.params.name);
     if (!sess) return res.status(404).json({ error: 'Session not found' });
 
     const fs = require('fs');
@@ -377,7 +396,7 @@ function start(port = 9847, autoOpen = true) {
   }));
 
   app.post('/api/sessions/:name/permissions', safe((req, res) => {
-    const sess = config.listSessions().find(s => s.name === req.params.name);
+    const sess = config.findSession(req.params.name);
     if (!sess?.projectPath) return res.status(400).json({ error: 'No project path' });
 
     const fs = require('fs');
@@ -537,6 +556,29 @@ function start(port = 9847, autoOpen = true) {
       console.error('[Cleanup] Error:', err.message);
     }
   }, 24 * 60 * 60 * 1000);
+
+  // Auto-cleanup orphaned pipeline tmux sessions every 5 minutes
+  // Kills csm-task-*/csm-plan-*/csm-exec-* sessions that have a shell prompt
+  // (meaning Claude has finished and the session is idle)
+  setInterval(() => {
+    try {
+      const all = tmux.listTmuxSessions();
+      const pipelineRe = /^csm-(task|plan|exec)-/;
+      for (const s of all) {
+        if (!pipelineRe.test(s)) continue;
+        const output = tmux.capturePane(s, null, null);
+        if (!output) continue;
+        const lastLines = output.split('\n').slice(-3).join('\n');
+        // If session shows a shell prompt ($), the pipeline process has exited
+        if (/\$\s*$/.test(lastLines) && !/claude/.test(lastLines)) {
+          console.log(`[Cleanup] Killing orphaned pipeline session: ${s}`);
+          tmux.killSession(s);
+        }
+      }
+    } catch (err) {
+      console.error('[Pipeline Cleanup] Error:', err.message);
+    }
+  }, 5 * 60 * 1000);
 
   // ─── Start ───────────────────────────────────────────
 

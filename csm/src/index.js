@@ -125,19 +125,51 @@ program
 program
   .command('discover')
   .description('Find tmux sessions that might be running Claude Code')
-  .action(() => {
+  .option('--cleanup', 'Kill all orphaned pipeline sessions')
+  .action((opts) => {
     const tmuxSessions = tmux.listTmuxSessions();
     if (tmuxSessions.length === 0) {
       console.log(chalk.yellow('No tmux sessions found.'));
       return;
     }
+
+    if (opts.cleanup) {
+      const pipelineRe = /^csm-(task|plan|exec)-/;
+      let killed = 0;
+      for (const s of tmuxSessions) {
+        if (pipelineRe.test(s)) {
+          tmux.killSession(s);
+          killed++;
+          console.log(chalk.red(`  ✗ Killed: ${s}`));
+        }
+      }
+      console.log(killed > 0
+        ? chalk.green(`\n✓ Cleaned up ${killed} pipeline session(s)`)
+        : chalk.gray('\nNo pipeline sessions to clean up'));
+      return;
+    }
+
     const configured = new Set(config.listSessions().map(s => s.tmuxSession));
+    const pipelineRe = /^csm-(task|plan|exec)-/;
+
     console.log(chalk.bold('\nAvailable tmux sessions:\n'));
     for (const s of tmuxSessions) {
       const tracked = configured.has(s) ? chalk.green(' [tracked]') : '';
-      console.log(`  ${chalk.cyan(s)}${tracked}`);
+      let typeLabel = '';
+      if (s.startsWith('csm-task-')) {
+        const m = s.match(/^csm-task-(.+)-(\d+)$/);
+        typeLabel = m ? chalk.magenta(` [task #${m[2]} → ${m[1]}]`) : chalk.magenta(' [task session]');
+      } else if (s.startsWith('csm-exec-')) {
+        const m = s.match(/^csm-exec-(.+)-(\d+)$/);
+        typeLabel = m ? chalk.magenta(` [exec #${m[2]} → ${m[1]}]`) : chalk.magenta(' [exec session]');
+      } else if (s.startsWith('csm-plan-')) {
+        const m = s.match(/^csm-plan-(.+)$/);
+        typeLabel = m ? chalk.magenta(` [planning → ${m[1]}]`) : chalk.magenta(' [planning session]');
+      }
+      console.log(`  ${chalk.cyan(s)}${tracked}${typeLabel}`);
     }
-    console.log(chalk.gray(`\nUse: csm add <name> <tmux-session> to start monitoring\n`));
+    console.log(chalk.gray(`\nUse: csm add <name> <tmux-session> to start monitoring`));
+    console.log(chalk.gray(`Use: csm discover --cleanup to kill orphaned pipeline sessions\n`));
   });
 
 // Config command

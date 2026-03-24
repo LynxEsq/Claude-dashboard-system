@@ -12,7 +12,8 @@ function capturePane(tmuxSession, tmuxWindow, tmuxPane, lines = 500) {
       `tmux capture-pane -t "${target}" -p -S - -E -`,
       { encoding: 'utf-8', timeout: 5000 }
     );
-    return output;
+    // Strip trailing empty/whitespace-only lines
+    return output.replace(/(\r?\n\s*)+$/, '\n');
   } catch (err) {
     return null;
   }

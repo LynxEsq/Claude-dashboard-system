@@ -78,7 +78,8 @@ async function pollTaskOutput(taskId) {
     const status = await API.taskExecStatus(State.selected, taskId);
     if (State.selectedTask !== taskId) return; // switched away
 
-    if (status.preview) {
+    // Only update content and scroll when live mode is on
+    if (State.liveMode && status.preview) {
       el('termBody').textContent = status.preview;
       const body = el('termBody');
       body.scrollTop = body.scrollHeight;
@@ -529,8 +530,19 @@ async function deleteProject(name) {
 
 function toggleLive() {
   State.liveMode = el('termLive').checked;
+  const termCol = document.querySelector('.col-terminal');
   if (State.liveMode) {
-    renderTerminal();
+    // Re-enable: refresh content and scroll to bottom
+    if (termCol) termCol.classList.remove('live-paused');
+    if (State.selectedTask) {
+      // Re-render selected task output
+      selectTask(State.selectedTask);
+    } else {
+      renderTerminal();
+    }
+  } else {
+    // Paused: add visual indicator
+    if (termCol) termCol.classList.add('live-paused');
   }
 }
 
@@ -620,7 +632,7 @@ async function addCustomPerm() {
 
 // ─── Tmux Panel ─────────────────────────────────
 
-const SERVICE_SESSION_RE = /^csm-(exec|plan)-/;
+const SERVICE_SESSION_RE = /^csm-(exec|plan|task)-/;
 // STATUS_LABELS defined in state.js
 
 async function toggleTmuxPanel() {
@@ -700,30 +712,35 @@ async function refreshTmuxPanelContent() {
     `).join('');
   }
 
-  // --- Service sessions section ---
+  // --- Service sessions section (pipeline: csm-task-*, csm-plan-*, csm-exec-*) ---
   if (serviceSessions.length > 0) {
     html += `<div class="tmux-section-header tmux-section-service">
-      <span>Service</span>
+      <span>Pipeline Sessions</span>
       <span class="tmux-section-hint">${serviceSessions.length} internal</span>
       <label class="tmux-service-toggle" onclick="event.stopPropagation()">
         <input type="checkbox" id="tmuxShowService" ${showService ? 'checked' : ''} onchange="refreshTmuxPanelContent()">
         show
       </label>
+      <button class="btn sm danger" onclick="event.stopPropagation(); cleanupOrphanedSessions()" title="Kill all orphaned pipeline sessions" style="margin-left:8px;font-size:11px">Cleanup</button>
     </div>`;
     if (showService) {
-      html += serviceSessions.map(name => `
+      html += serviceSessions.map(name => {
+        const typeLabel = classifyPipelineSession(name);
+        return `
         <div class="tmux-panel-item tmux-service-item">
           <div class="tmux-panel-left">
             <div class="status-dot idle" style="opacity:0.4"></div>
             <div class="tmux-panel-info">
-              <span class="tmux-panel-name" style="opacity:0.5;font-size:12px">${esc(name)}</span>
+              <span class="tmux-panel-name" style="opacity:0.7;font-size:12px">${esc(name)}</span>
+              <span class="tmux-panel-sub">${esc(typeLabel)}</span>
             </div>
           </div>
           <div class="tmux-panel-actions">
             <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in Terminal.app">Terminal</button>
+            <button class="btn sm danger" onclick="event.stopPropagation(); killPipelineSession('${escJs(name)}')" title="Kill this session">Kill</button>
           </div>
         </div>
-      `).join('');
+      `}).join('');
     }
   }
 
@@ -830,6 +847,58 @@ document.addEventListener('click', () => hideProjectCtxMenu());
 document.addEventListener('contextmenu', (e) => {
   if (!e.target.closest('.project-item')) hideProjectCtxMenu();
 });
+
+/**
+ * Classify a pipeline session name into a human-readable type.
+ * Naming convention: csm-{type}-{safeName}-{taskId}
+ */
+function classifyPipelineSession(name) {
+  if (name.startsWith('csm-task-')) {
+    const match = name.match(/^csm-task-(.+)-(\d+)$/);
+    if (match) return `Interactive task #${match[2]} (${match[1]})`;
+    return 'Interactive task session';
+  }
+  if (name.startsWith('csm-exec-')) {
+    const match = name.match(/^csm-exec-(.+)-(\d+)$/);
+    if (match) return `Silent execution #${match[2]} (${match[1]})`;
+    return 'Silent execution session';
+  }
+  if (name.startsWith('csm-plan-')) {
+    const match = name.match(/^csm-plan-(.+)$/);
+    if (match) return `Planning session (${match[1]})`;
+    return 'Planning session';
+  }
+  return 'Pipeline session';
+}
+
+async function killPipelineSession(tmuxName) {
+  if (!confirm(`Kill pipeline session "${tmuxName}"?`)) return;
+  try {
+    await fetch('/api/tmux/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tmuxSession: tmuxName }),
+    });
+    refreshTmuxPanelContent();
+  } catch (e) {
+    console.error('Failed to kill session:', e);
+  }
+}
+
+async function cleanupOrphanedSessions() {
+  if (!confirm('Kill all orphaned pipeline sessions (csm-task-*, csm-plan-*, csm-exec-*)?')) return;
+  try {
+    const res = await fetch('/api/tmux/cleanup-pipeline', { method: 'POST' });
+    const data = await res.json();
+    refreshTmuxPanelContent();
+    refreshTmuxCount();
+    if (data.killed > 0) {
+      console.log(`Cleaned up ${data.killed} pipeline session(s)`);
+    }
+  } catch (e) {
+    console.error('Cleanup failed:', e);
+  }
+}
 
 // Close tmux panel on outside click
 document.addEventListener('click', (e) => {

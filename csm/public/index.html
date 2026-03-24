@@ -29,6 +29,7 @@
   <div class="ctx-item" onclick="ctxAction('select')">Select</div>
   <div class="ctx-item" onclick="ctxAction('focus')">Focus tmux</div>
   <div class="ctx-item" onclick="ctxAction('terminal')">Open Terminal</div>
+  <div class="ctx-item" onclick="ctxAction('info')">Settings</div>
   <div class="ctx-item" onclick="ctxAction('perms')">Permissions</div>
   <div class="ctx-sep"></div>
   <div class="ctx-item" onclick="ctxAction('untrack')">Untrack</div>
@@ -93,7 +94,7 @@
           <span class="ios-slider"></span>
           <span class="ios-label">Live</span>
         </label>
-        <button class="btn sm green" onclick="openTerminal()" title="Open in Terminal.app">Terminal</button>
+        <button class="btn sm green" onclick="openTerminal()" id="btnTerminal" title="Open in external terminal">Terminal</button>
         <button class="btn sm" onclick="showPermsModal()" title="Manage permissions">Perms</button>
         <button class="btn sm" onclick="focusSelected()">Focus</button>
         <button class="btn sm" onclick="restartSelected()">Restart</button>
@@ -128,7 +129,10 @@
     </div>
     <div class="fg">
       <label>Project Path (optional)</label>
-      <input type="text" id="c-path" placeholder="/path/to/project">
+      <div style="display:flex;gap:6px">
+        <input type="text" id="c-path" placeholder="/path/to/project" style="flex:1">
+        <button class="btn sm" onclick="openDirBrowser('c-path')" title="Browse directories">Browse</button>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
       <input type="checkbox" id="c-claude" checked style="width:auto">
@@ -137,6 +141,58 @@
     <div class="modal-btns">
       <button class="btn" onclick="hideModal('create')">Cancel</button>
       <button class="btn primary" onclick="createProject()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Project Info Modal -->
+<div class="modal-overlay" id="modal-project-info">
+  <div class="modal" style="width:520px">
+    <h2>Project Settings</h2>
+    <div class="fg">
+      <label>Name</label>
+      <input type="text" id="pi-name" readonly style="opacity:0.7">
+    </div>
+    <div class="fg">
+      <label>Tmux Session</label>
+      <input type="text" id="pi-tmux" readonly style="opacity:0.7">
+    </div>
+    <div class="fg">
+      <label>Project Path</label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="pi-path" placeholder="Not set" style="flex:1">
+        <button class="btn sm" onclick="openDirBrowser('pi-path')" title="Browse directories">Browse</button>
+      </div>
+    </div>
+    <div class="fg">
+      <label>Status</label>
+      <div id="pi-status" style="font-size:13px;padding:6px 0"></div>
+    </div>
+    <div class="fg">
+      <label>Tmux Sessions</label>
+      <div id="pi-tmux-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px"></div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="hideModal('project-info')">Cancel</button>
+      <button class="btn primary" onclick="saveProjectInfo()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Directory Browser Modal -->
+<div class="modal-overlay" id="modal-dirbrowser">
+  <div class="modal" style="width:560px;max-height:80vh;display:flex;flex-direction:column">
+    <h2 style="flex-shrink:0">Browse Directories</h2>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-shrink:0">
+      <button class="btn sm" onclick="dirBrowserUp()" title="Parent directory">..</button>
+      <button class="btn sm" onclick="dirBrowserHome()" title="Home directory">~</button>
+      <input type="text" id="db-path" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter')dirBrowserGo(this.value)">
+    </div>
+    <div id="db-indicators" style="display:flex;gap:8px;margin-bottom:8px;font-size:11px;flex-shrink:0"></div>
+    <div id="db-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:6px;min-height:200px;max-height:400px"></div>
+    <div class="modal-btns" style="flex-shrink:0">
+      <button class="btn" onclick="hideModal('dirbrowser')">Cancel</button>
+      <button class="btn primary" onclick="dirBrowserSelect()">Select This Directory</button>
     </div>
   </div>
 </div>
@@ -187,6 +243,21 @@
   </div>
 </div>
 
+<!-- SSH Command Modal (remote access) -->
+<div class="modal-overlay" id="modal-ssh">
+  <div class="modal" style="width:520px">
+    <h2>SSH Connect</h2>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px">You are accessing CSM remotely. Use this command to attach to the terminal:</p>
+    <div style="position:relative">
+      <pre id="sshCommand" style="background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-all;color:var(--green);margin-bottom:8px;cursor:pointer" onclick="copySshCommand()" title="Click to copy"></pre>
+      <button class="btn sm" onclick="copySshCommand()" style="position:absolute;top:6px;right:6px;font-size:11px" id="sshCopyBtn">Copy</button>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="hideModal('ssh')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- JS Modules -->
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
 <script>
@@ -203,6 +274,15 @@
 <script>
   // ─── Init ──────────────────────────────────────
   connectWS();
+  API.getPlatform().then(d => { State.platform = d; }).catch(() => {});
+  API.getAccessInfo().then(d => {
+    State.isRemote = !d.isLocal;
+    State.sshInfo = { user: d.sshUser, host: d.sshHost };
+    if (State.isRemote) {
+      const btn = document.getElementById('btnTerminal');
+      if (btn) { btn.title = 'Copy SSH command'; btn.textContent = 'SSH'; }
+    }
+  }).catch(() => {});
   API.getSessions().then(d => { State.sessions = d; renderProjects(); loadAllTaskCounts(); }).catch(err => handleApiError(err, 'init'));
   API.getAlerts().then(d => { State.alerts = d; renderAlerts(); }).catch(() => {});
 

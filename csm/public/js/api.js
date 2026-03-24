@@ -131,4 +131,19 @@ const API = {
   // ─── Alerts ──────────────────────────────────
   getAlerts: () => apiFetch('/api/alerts'),
   ackAlert: (id) => apiFetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' }),
+
+  // ─── Platform ─────────────────────────────────
+  getPlatform: () => apiFetch('/api/platform'),
+  getAccessInfo: () => apiFetch('/api/access-info'),
+
+  // ─── Session Tmux Sessions ───────────────────
+  getSessionTmuxList: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/tmux-sessions`),
+
+  // ─── Filesystem ──────────────────────────────
+  listDir: (dirPath) => apiFetch(`/api/fs/list?path=${encodeURIComponent(dirPath || '')}`),
+
+  // ─── Config ──────────────────────────────────
+  updateSession: (name, data) => apiFetch(`/api/config/session`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ name, ...data })
+  }),
 };

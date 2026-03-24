@@ -3,12 +3,14 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { execSync } = require('child_process');
 const SessionMonitor = require('../lib/monitor');
 const history = require('../lib/history');
 const config = require('../lib/config');
 const tmux = require('../lib/tmux');
 const { PIPELINE_SESSION_RE } = require('../lib/utils');
+const platform = require('../lib/platform');
 
 let monitor = null;
 
@@ -26,7 +28,9 @@ function safe(fn) {
   };
 }
 
-function start(port = 9847, autoOpen = true) {
+function start(port = 9847, autoOpen = true, host) {
+  const cfg = config.load();
+  const bindHost = host || cfg.host || 'localhost';
   const app = express();
   const server = http.createServer(app);
   const wss = new WebSocket.Server({ server });
@@ -242,7 +246,7 @@ function start(port = 9847, autoOpen = true) {
     }
   }));
 
-  // Open native Terminal.app attached to tmux session
+  // Open native terminal attached to tmux session (cross-platform)
   // ?tmux=session-name overrides the default tmux session (e.g. for planning)
   app.post('/api/sessions/:name/terminal', safe((req, res) => {
     let tmuxName = req.body?.tmux || req.query?.tmux;
@@ -253,15 +257,83 @@ function start(port = 9847, autoOpen = true) {
     }
 
     try {
-      const script = `tell application "Terminal"
-        activate
-        do script "tmux attach -t '${tmuxName}'"
-      end tell`;
-      execSync(`osascript -e '${script}'`, { timeout: 5000 });
+      platform.openTerminalAttach(tmuxName);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  }));
+
+  // Platform info (OS, terminal name) for frontend
+  app.get('/api/platform', safe((req, res) => {
+    res.json(platform.getPlatformInfo());
+  }));
+
+  // Access info: detect local vs remote client, provide SSH connection details
+  app.get('/api/access-info', safe((req, res) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    const isLocal = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip);
+
+    // Find first non-internal IPv4 address for SSH host
+    let sshHost = os.hostname();
+    const nets = os.networkInterfaces();
+    for (const iface of Object.values(nets)) {
+      for (const net of iface) {
+        if (net.family === 'IPv4' && !net.internal) {
+          sshHost = net.address;
+          break;
+        }
+      }
+      if (sshHost !== os.hostname()) break;
+    }
+
+    res.json({
+      isLocal,
+      sshUser: os.userInfo().username,
+      sshHost,
+      serverHostname: os.hostname(),
+    });
+  }));
+
+  // Browse filesystem directories (for directory picker)
+  app.get('/api/fs/list', safe((req, res) => {
+    const reqPath = req.query.path || os.homedir();
+    const absPath = path.resolve(reqPath);
+
+    if (!fs.existsSync(absPath)) {
+      return res.status(404).json({ error: 'Path not found' });
+    }
+
+    const stat = fs.statSync(absPath);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Not a directory' });
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(absPath, { withFileTypes: true });
+    } catch (err) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const dirs = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    // Detect if this directory is a git repo
+    const isGitRepo = fs.existsSync(path.join(absPath, '.git'));
+    // Check for CLAUDE.md (Claude Code project marker)
+    const hasClaudeMd = fs.existsSync(path.join(absPath, 'CLAUDE.md'));
+
+    res.json({
+      path: absPath,
+      parent: path.dirname(absPath),
+      dirs,
+      isGitRepo,
+      hasClaudeMd,
+      homedir: os.homedir(),
+    });
   }));
 
   // List available (untracked) tmux sessions
@@ -326,6 +398,42 @@ function start(port = 9847, autoOpen = true) {
   app.delete('/api/pipeline/wishes/:id', safe((req, res) => {
     pipeline.deleteWish(parseInt(req.params.id));
     res.json({ success: true });
+  }));
+
+  // All tmux sessions related to a project (main + tasks)
+  app.get('/api/sessions/:name/tmux-sessions', safe((req, res) => {
+    const sess = config.findSession(req.params.name);
+    if (!sess) return res.status(404).json({ error: 'Session not found' });
+
+    const sessions = [];
+
+    // Main project session
+    sessions.push({
+      type: 'project',
+      tmuxSession: sess.tmuxSession,
+      label: 'Main session',
+      alive: tmux.sessionExists(sess.tmuxSession),
+    });
+
+    // Active task/plan sessions from pipeline mappings
+    const mappings = pipeline.getActiveSessionMappings(req.params.name);
+    for (const m of mappings) {
+      const task = pipeline.getTasks(req.params.name).find(t => t.id === m.task_id);
+      let type = 'task';
+      if (m.tmux_session_name.startsWith('csm-plan-')) type = 'plan';
+      else if (m.tmux_session_name.startsWith('csm-exec-')) type = 'silent';
+
+      sessions.push({
+        type,
+        tmuxSession: m.tmux_session_name,
+        label: task ? `Task #${task.id}: ${task.title}` : `Task #${m.task_id}`,
+        taskId: m.task_id,
+        alive: tmux.sessionExists(m.tmux_session_name),
+        worktreePath: m.worktree_path || null,
+      });
+    }
+
+    res.json(sessions);
   }));
 
   app.get('/api/pipeline/:name/tasks', safe((req, res) => {
@@ -506,7 +614,7 @@ function start(port = 9847, autoOpen = true) {
     }
   }));
 
-  // Open Terminal.app in worktree directory
+  // Open terminal in worktree directory (cross-platform)
   app.post('/api/pipeline/:name/tasks/:taskId/open-terminal', safe((req, res) => {
     const taskId = parseInt(req.params.taskId);
     const wtPath = worktree.getWorktreePath(taskId);
@@ -516,9 +624,7 @@ function start(port = 9847, autoOpen = true) {
     }
 
     try {
-      const escapedPath = wtPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const script = `tell application "Terminal"\nactivate\ndo script "cd \\"${escapedPath}\\" && pwd"\nend tell`;
-      execSync(`osascript -e ${JSON.stringify(script)}`, { timeout: 5000 });
+      platform.openTerminalInDir(wtPath);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -729,8 +835,22 @@ function start(port = 9847, autoOpen = true) {
 
   // ─── Start ───────────────────────────────────────────
 
-  server.listen(port, () => {
-    console.log(`\n  🖥  CSM Dashboard → http://localhost:${port}\n`);
+  server.listen(port, bindHost, () => {
+    if (bindHost === '0.0.0.0') {
+      // Find LAN IP for the URL hint
+      let lanIp = 'localhost';
+      const nets = os.networkInterfaces();
+      for (const iface of Object.values(nets)) {
+        for (const net of iface) {
+          if (net.family === 'IPv4' && !net.internal) { lanIp = net.address; break; }
+        }
+        if (lanIp !== 'localhost') break;
+      }
+      console.log(`\n  🖥  CSM Dashboard → http://${lanIp}:${port}`);
+      console.log(`  ⚠  Server bound to 0.0.0.0 — accessible from network. No authentication.\n`);
+    } else {
+      console.log(`\n  🖥  CSM Dashboard → http://${bindHost}:${port}\n`);
+    }
     if (autoOpen) {
       const open = require('open');
       open(`http://localhost:${port}`).catch(() => {});

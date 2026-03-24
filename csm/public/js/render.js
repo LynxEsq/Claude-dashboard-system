@@ -343,7 +343,7 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
 
   // Worktree path (shown under description when expanded)
   const wtPathHtml = expanded && hasWorktree
-    ? `<div class="task-wt-path" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open in Terminal.app">${esc(t.worktree_path)}</div>`
+    ? `<div class="task-wt-path" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open in ${State.platform.terminal}">${esc(t.worktree_path)}</div>`
     : '';
 
   // Diff summary (loaded async, stored in State.taskDiffs)
@@ -395,7 +395,7 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
         <div class="task-toolbar-left">
           ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" onclick="event.stopPropagation(); runTaskInteractive(${t.id})" title="${hasBlockers ? 'Blocked — blocker still running' : 'Run in Claude session'}">Run</button>` : ''}
           ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" style="opacity:0.7" onclick="event.stopPropagation(); runTaskSilent(${t.id})" title="${hasBlockers ? 'Blocked — blocker still running' : 'Run with --print (silent)'}">Silent</button>` : ''}
-          ${hasWorktree && expanded ? `<button class="btn sm" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open worktree in Terminal.app">Terminal</button>` : ''}
+          ${hasWorktree && expanded ? `<button class="btn sm" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open worktree in ${State.platform.terminal}">Terminal</button>` : ''}
           ${hasWorktree && expanded && (t.status === 'completed' || t.status === 'merge_pending') ? `<button class="btn sm" onclick="event.stopPropagation(); runAiReview(${t.id})" title="Run AI code review">Review</button>` : ''}
         </div>
         <div class="task-toolbar-right">

@@ -8,6 +8,7 @@ const DB_FILE = path.join(CONFIG_DIR, 'history.db');
 
 const DEFAULT_CONFIG = {
   port: 9847,
+  host: 'localhost',         // 'localhost' = local only, '0.0.0.0' = allow remote access
   pollInterval: 3000,       // ms between tmux polls
   historyRetention: 30,     // days to keep history
   alerts: {

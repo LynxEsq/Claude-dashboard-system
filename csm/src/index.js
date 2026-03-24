@@ -78,9 +78,10 @@ program
   .command('web')
   .description('Start the web dashboard on localhost:9847')
   .option('-p, --port <port>', 'Port number', '9847')
+  .option('-H, --host <host>', 'Bind address (localhost or 0.0.0.0 for remote access)')
   .option('--no-open', 'Don\'t auto-open browser')
   .action(async (opts) => {
-    await startWeb(parseInt(opts.port), opts.open);
+    await startWeb(parseInt(opts.port), opts.open, opts.host);
   });
 
 // Shortcut: --web flag on main command
@@ -195,7 +196,7 @@ program.parse(process.argv);
 
 // Handle --web flag
 if (program.opts().web) {
-  startWeb(parseInt(program.opts().port) || 9847, true);
+  startWeb(parseInt(program.opts().port) || 9847, true, program.opts().host);
 }
 
 // ─── Helper Functions ──────────────────────────────────────────
@@ -281,7 +282,7 @@ async function watchMode() {
   }
 }
 
-async function startWeb(port, autoOpen) {
+async function startWeb(port, autoOpen, host) {
   const server = require('./web/server');
-  server.start(port, autoOpen);
+  server.start(port, autoOpen, host);
 }

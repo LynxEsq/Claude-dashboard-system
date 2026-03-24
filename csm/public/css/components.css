@@ -720,6 +720,31 @@
   margin-top: 16px;
 }
 
+/* ─── Directory Browser ──────────────────────── */
+.db-item {
+  padding: 7px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+.db-item:hover { background: var(--bg3); }
+.db-item:last-child { border-bottom: none; }
+.db-icon { font-size: 15px; flex-shrink: 0; opacity: 0.7; }
+.db-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.db-badge.git { background: var(--green); color: #000; opacity: 0.8; }
+.db-badge.claude { background: var(--blue); color: #000; opacity: 0.8; }
+.db-empty { padding: 20px; text-align: center; color: var(--text2); font-size: 12px; }
+
 /* ─── Markdown Body ──────────────────────────── */
 .markdown-body {
   font-size: 12px;

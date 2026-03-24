@@ -423,6 +423,7 @@ async function pollPlanStatus() {
 
 function openPlanningTerminal() {
   if (State.planningSession) {
+    if (State.isRemote) { showSshCommand(State.planningSession); return; }
     API.openTerminal(State.selected);
   }
 }
@@ -515,6 +516,10 @@ async function mergeTask(taskId, action) {
 
 async function openWorktreeTerminal(taskId) {
   if (!State.selected) return;
+  if (State.isRemote) {
+    const t = State.tasks.find(t => t.id === taskId);
+    if (t && t.worktree_path) { showSshCommandDir(t.worktree_path); return; }
+  }
   try {
     await API.openWorktreeTerminal(State.selected, taskId);
   } catch (err) { handleApiError(err, 'openWorktreeTerminal'); }
@@ -588,10 +593,10 @@ async function openTerminal() {
 
   // Priority: selected task > planning session > project session
   if (State.selectedTask) {
-    // Check if this task has a running tmux session
     try {
       const status = await API.taskExecStatus(State.selected, State.selectedTask);
       if (status.tmuxSession) {
+        if (State.isRemote) { showSshCommand(status.tmuxSession); return; }
         await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/terminal?tmux=${encodeURIComponent(status.tmuxSession)}`, {
           method: 'POST'
         });
@@ -601,10 +606,15 @@ async function openTerminal() {
   }
 
   if (State.planningSession) {
+    if (State.isRemote) { showSshCommand(State.planningSession); return; }
     await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/terminal?tmux=${encodeURIComponent(State.planningSession)}`, {
       method: 'POST'
     });
   } else {
+    if (State.isRemote) {
+      const sess = State.sessions[State.selected];
+      if (sess) { showSshCommand(sess.tmuxSession || State.selected); return; }
+    }
     await API.openTerminal(State.selected);
   }
 }
@@ -850,7 +860,7 @@ async function refreshTmuxPanelContent() {
           </div>
           <div class="tmux-panel-actions">
             ${csmName ? `<button class="btn sm" onclick="event.stopPropagation(); selectProject('${escJs(csmName)}'); closeTmuxPanel()" title="Select in dashboard">Select</button>` : ''}
-            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(tmuxName)}')" title="Open in Terminal.app">Terminal</button>
+            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(tmuxName)}')" title="Open in ${State.platform.terminal}">Terminal</button>
             ${csmName ? `<button class="btn sm" onclick="event.stopPropagation(); focusTmuxSession('${escJs(csmName)}')" title="Switch tmux focus">Focus</button>` : ''}
             ${csmName ? `<button class="btn sm danger" onclick="event.stopPropagation(); untrackSession('${escJs(csmName)}')" title="Stop monitoring (keeps tmux alive)">Untrack</button>` : ''}
           </div>
@@ -873,7 +883,7 @@ async function refreshTmuxPanelContent() {
         </div>
         <div class="tmux-panel-actions">
           <button class="btn sm primary" onclick="event.stopPropagation(); trackTmuxSession('${escJs(name)}')" title="Start monitoring this session">Track</button>
-          <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in Terminal.app">Terminal</button>
+          <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in ${State.platform.terminal}">Terminal</button>
         </div>
       </div>
     `).join('');
@@ -903,7 +913,7 @@ async function refreshTmuxPanelContent() {
             </div>
           </div>
           <div class="tmux-panel-actions">
-            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in Terminal.app">Terminal</button>
+            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in ${State.platform.terminal}">Terminal</button>
             <button class="btn sm danger" onclick="event.stopPropagation(); killPipelineSession('${escJs(name)}')" title="Kill this session">Kill</button>
           </div>
         </div>
@@ -924,6 +934,7 @@ function closeTmuxPanel() {
 
 async function attachTmux(tmuxName) {
   closeTmuxPanel();
+  if (State.isRemote) { showSshCommand(tmuxName); return; }
   await API.openTmuxSession('_', tmuxName);
 }
 
@@ -995,7 +1006,16 @@ async function ctxAction(action) {
       await API.focusSession(name);
       break;
     case 'terminal':
-      await API.openTerminal(name);
+      if (State.isRemote) {
+        const sess = State.sessions[name];
+        showSshCommand(sess ? sess.tmuxSession || name : name);
+      } else {
+        await API.openTerminal(name);
+      }
+      break;
+    case 'info':
+      selectProject(name);
+      setTimeout(() => showProjectInfo(name), 100);
       break;
     case 'perms':
       selectProject(name);
@@ -1088,6 +1108,168 @@ async function refreshTmuxCount() {
 }
 setInterval(refreshTmuxCount, 5000);
 refreshTmuxCount();
+
+// ─── SSH Command Modal (remote access) ──────────
+
+function showSshCommand(tmuxSession) {
+  const { user, host } = State.sshInfo;
+  const cmd = `ssh -t ${user}@${host} "tmux attach -t '${tmuxSession}'"`;
+  el('sshCommand').textContent = cmd;
+  showModal('ssh');
+}
+
+function showSshCommandDir(dirPath) {
+  const { user, host } = State.sshInfo;
+  const cmd = `ssh -t ${user}@${host} "cd '${dirPath}' && bash"`;
+  el('sshCommand').textContent = cmd;
+  showModal('ssh');
+}
+
+function copySshCommand() {
+  const cmd = el('sshCommand').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = el('sshCopyBtn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }).catch(() => {});
+}
+
+// ─── Project Info Modal ─────────────────────────
+
+async function showProjectInfo(name) {
+  const n = name || State.selected;
+  if (!n) return;
+  const sess = State.sessions[n];
+  if (!sess) return;
+
+  el('pi-name').value = n;
+  el('pi-tmux').value = sess.tmuxSession || '';
+  el('pi-path').value = sess.projectPath || '';
+
+  const statusLabel = STATUS_LABELS[sess.status] || sess.status || 'Unknown';
+  el('pi-status').innerHTML = `<span class="status-dot ${sess.status}" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>${esc(statusLabel)}`;
+
+  // Load tmux sessions list
+  el('pi-tmux-list').innerHTML = '<div style="color:var(--text2);font-size:11px">Loading...</div>';
+  showModal('project-info');
+
+  try {
+    const sessions = await API.getSessionTmuxList(n);
+    const typeLabels = { project: 'main', task: 'task', plan: 'plan', silent: 'silent' };
+    const typeColors = { project: 'var(--blue)', task: 'var(--green)', plan: 'var(--yellow)', silent: 'var(--text2)' };
+
+    el('pi-tmux-list').innerHTML = sessions.map(s => {
+      const dot = s.alive
+        ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:6px"></span>`
+        : `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--text2);opacity:0.3;margin-right:6px"></span>`;
+      const badge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${typeColors[s.type] || 'var(--text2)'};color:#000;opacity:0.8">${typeLabels[s.type] || s.type}</span>`;
+      const termBtn = State.isRemote
+        ? `<button class="btn sm" onclick="event.stopPropagation();showSshCommand('${esc(s.tmuxSession)}')" style="font-size:10px;padding:2px 6px">SSH</button>`
+        : `<button class="btn sm" onclick="event.stopPropagation();API.openTmuxSession('_','${esc(s.tmuxSession)}')" style="font-size:10px;padding:2px 6px">Attach</button>`;
+      return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+        ${dot}${badge}
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.label)}">${esc(s.label)}</span>
+        <code style="font-size:10px;color:var(--text2)">${esc(s.tmuxSession)}</code>
+        ${s.alive ? termBtn : ''}
+      </div>`;
+    }).join('');
+  } catch {
+    el('pi-tmux-list').innerHTML = '<div style="color:var(--text2);font-size:11px">Could not load sessions</div>';
+  }
+}
+
+async function saveProjectInfo() {
+  const name = el('pi-name').value;
+  const projectPath = el('pi-path').value.trim() || null;
+  const sess = State.sessions[name];
+  if (!sess) return;
+
+  try {
+    await API.updateSession(name, {
+      tmuxSession: sess.tmuxSession,
+      projectPath,
+    });
+    showToast('Project settings saved', 'info');
+    hideModal('project-info');
+    // Refresh
+    const d = await API.getSessions();
+    State.sessions = d;
+    renderProjects();
+  } catch (err) { handleApiError(err, 'saveProjectInfo'); }
+}
+
+// ─── Directory Browser ──────────────────────────
+
+let _dirBrowserTarget = null; // input element id to fill
+let _dirBrowserPath = '';
+
+function openDirBrowser(targetInputId) {
+  _dirBrowserTarget = targetInputId;
+  const currentVal = el(targetInputId)?.value?.trim();
+  dirBrowserGo(currentVal || '');
+  showModal('dirbrowser');
+}
+
+async function dirBrowserGo(dirPath) {
+  const list = el('db-list');
+  list.innerHTML = '<div class="db-empty">Loading...</div>';
+
+  try {
+    const data = await API.listDir(dirPath);
+    _dirBrowserPath = data.path;
+    el('db-path').value = data.path;
+
+    // Indicators
+    const ind = el('db-indicators');
+    let badges = '';
+    if (data.isGitRepo) badges += '<span class="db-badge git">git</span>';
+    if (data.hasClaudeMd) badges += '<span class="db-badge claude">CLAUDE.md</span>';
+    ind.innerHTML = badges;
+
+    if (data.dirs.length === 0) {
+      list.innerHTML = '<div class="db-empty">No subdirectories</div>';
+      return;
+    }
+
+    list.innerHTML = data.dirs.map(name => {
+      const full = data.path.replace(/\/$/, '') + '/' + name;
+      return `<div class="db-item" data-path="${esc(full)}" ondblclick="dirBrowserGo(this.dataset.path)" onclick="dirBrowserHighlight(this)">
+        <span class="db-icon">&#128193;</span>
+        <span class="db-name">${esc(name)}</span>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="db-empty" style="color:var(--red)">${esc(err.message || 'Error loading directory')}</div>`;
+  }
+}
+
+function dirBrowserHighlight(item) {
+  document.querySelectorAll('#db-list .db-item').forEach(e => e.style.background = '');
+  item.style.background = 'var(--bg3)';
+  const name = item.querySelector('.db-name')?.textContent;
+  if (name) {
+    const base = document.getElementById('db-path').value.replace(/\/$/, '');
+    _dirBrowserPath = base + '/' + name;
+    // Don't update path input yet — just highlight. Double-click to navigate into.
+  }
+}
+
+function dirBrowserUp() {
+  const current = el('db-path').value;
+  const parent = current.replace(/\/[^/]+\/?$/, '') || '/';
+  dirBrowserGo(parent);
+}
+
+function dirBrowserHome() {
+  dirBrowserGo('');
+}
+
+function dirBrowserSelect() {
+  if (_dirBrowserTarget) {
+    el(_dirBrowserTarget).value = el('db-path').value;
+  }
+  hideModal('dirbrowser');
+}
 
 // ─── Modal Helpers ───────────────────────────────
 

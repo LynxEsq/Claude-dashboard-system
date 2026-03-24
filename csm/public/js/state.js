@@ -19,6 +19,9 @@ const State = {
   taskModes: {},         // { taskId: 'interactive' | 'silent' }
   taskDiffs: {},         // { taskId: { files_changed, insertions, deletions, summary } }
   planningWishIds: new Set(), // wish IDs currently being planned
+  platform: { platform: 'unknown', name: 'Unknown', terminal: 'Terminal' },
+  isRemote: false,
+  sshInfo: { user: '', host: '' },
 };
 
 // Task status order for sorting (merge_pending between running and completed)

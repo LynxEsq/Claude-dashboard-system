@@ -31,6 +31,8 @@ function start(port = 9847, autoOpen = true) {
   const server = http.createServer(app);
   const wss = new WebSocket.Server({ server });
 
+  const pipeline = require('../lib/pipeline');
+
   // Serve static dashboard
   app.use(express.static(path.join(__dirname, '../../public')));
   app.use(express.json());
@@ -57,6 +59,44 @@ function start(port = 9847, autoOpen = true) {
   app.post('/api/sessions/:name/focus', safe((req, res) => {
     const ok = monitor?.focusSession(req.params.name);
     res.json({ success: ok });
+  }));
+
+  // Send input to a specific task's tmux session (not the project session)
+  app.post('/api/tasks/:taskId/send', safe((req, res) => {
+    const { input } = req.body;
+    if (!input) return res.status(400).json({ error: 'No input provided' });
+    const mapping = pipeline.getSessionMapping(parseInt(req.params.taskId));
+    if (!mapping || mapping.status !== 'active') {
+      return res.status(404).json({ error: 'No active session for this task' });
+    }
+    const ok = tmux.sendKeys(mapping.tmux_session_name, null, null, input);
+    res.json({ success: ok });
+  }));
+
+  // Focus (switch-to) a specific task's tmux session
+  app.post('/api/tasks/:taskId/focus', safe((req, res) => {
+    const mapping = pipeline.getSessionMapping(parseInt(req.params.taskId));
+    if (!mapping || mapping.status !== 'active') {
+      return res.status(404).json({ error: 'No active session for this task' });
+    }
+    const ok = tmux.switchTo(mapping.tmux_session_name);
+    res.json({ success: ok });
+  }));
+
+  // Send raw keys (Enter, Ctrl+C, arrows, etc.) to a task's tmux session
+  app.post('/api/tasks/:taskId/keys', safe((req, res) => {
+    const { keys } = req.body;
+    if (!keys) return res.status(400).json({ error: 'keys is required' });
+    const mapping = pipeline.getSessionMapping(parseInt(req.params.taskId));
+    if (!mapping || mapping.status !== 'active') {
+      return res.status(404).json({ error: 'No active session for this task' });
+    }
+    try {
+      execSync(`tmux send-keys -t "${mapping.tmux_session_name}" ${keys}`, { timeout: 5000 });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }));
 
   app.get('/api/history/:name/status', safe((req, res) => {
@@ -255,8 +295,6 @@ function start(port = 9847, autoOpen = true) {
   }));
 
   // ─── Pipeline API ──────────────────────────────────────
-
-  const pipeline = require('../lib/pipeline');
 
   // Restore persistent session mappings (task↔tmux) from DB on startup
   try {

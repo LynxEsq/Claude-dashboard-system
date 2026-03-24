@@ -94,7 +94,7 @@ program
   .description('Send input text to a session\'s tmux pane')
   .action((name, input) => {
     const text = input.join(' ');
-    const session = config.listSessions().find(s => s.name === name);
+    const session = config.findSession(name);
     if (!session) {
       console.log(chalk.red(`Session "${name}" not found.`));
       return;
@@ -112,7 +112,7 @@ program
   .command('focus <name>')
   .description('Switch tmux focus to a session')
   .action((name) => {
-    const session = config.listSessions().find(s => s.name === name);
+    const session = config.findSession(name);
     if (!session) {
       console.log(chalk.red(`Session "${name}" not found.`));
       return;

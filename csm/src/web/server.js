@@ -379,10 +379,8 @@ function start(port = 9847, autoOpen = true) {
     const sess = config.findSession(req.params.name);
     if (!sess) return res.status(404).json({ error: 'Session not found' });
 
-    const fs = require('fs');
-    const p = require('path');
     const settingsPath = sess.projectPath
-      ? p.join(sess.projectPath, '.claude', 'settings.local.json')
+      ? path.join(sess.projectPath, '.claude', 'settings.local.json')
       : null;
 
     let perms = [];
@@ -399,10 +397,8 @@ function start(port = 9847, autoOpen = true) {
     const sess = config.findSession(req.params.name);
     if (!sess?.projectPath) return res.status(400).json({ error: 'No project path' });
 
-    const fs = require('fs');
-    const p = require('path');
-    const claudeDir = p.join(sess.projectPath, '.claude');
-    const settingsPath = p.join(claudeDir, 'settings.local.json');
+    const claudeDir = path.join(sess.projectPath, '.claude');
+    const settingsPath = path.join(claudeDir, 'settings.local.json');
 
     if (!fs.existsSync(claudeDir)) fs.mkdirSync(claudeDir, { recursive: true });
 
@@ -563,9 +559,8 @@ function start(port = 9847, autoOpen = true) {
   setInterval(() => {
     try {
       const all = tmux.listTmuxSessions();
-      const pipelineRe = /^csm-(task|plan|exec)-/;
       for (const s of all) {
-        if (!pipelineRe.test(s)) continue;
+        if (!PIPELINE_SESSION_RE.test(s)) continue;
         const output = tmux.capturePane(s, null, null);
         if (!output) continue;
         const lastLines = output.split('\n').slice(-3).join('\n');

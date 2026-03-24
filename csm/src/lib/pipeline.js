@@ -70,10 +70,25 @@ function initTables() {
       FOREIGN KEY (task_id) REFERENCES tasks(id)
     );
 
+    CREATE TABLE IF NOT EXISTS session_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL UNIQUE,
+      tmux_session_name TEXT NOT NULL,
+      session_name TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      created_at DATETIME DEFAULT (datetime('now')),
+      ended_at DATETIME,
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_wishes_session
       ON wishes(session_name, processed);
     CREATE INDEX IF NOT EXISTS idx_tasks_session
       ON tasks(session_name, status);
+    CREATE INDEX IF NOT EXISTS idx_session_mappings_task
+      ON session_mappings(task_id);
+    CREATE INDEX IF NOT EXISTS idx_session_mappings_active
+      ON session_mappings(status, session_name);
   `);
 
   // Migrations: add columns if missing (existing databases)
@@ -253,6 +268,94 @@ function getExecutionLog(sessionName, limit = 20) {
   `).all(sessionName, limit);
 }
 
+// ─── Session Mappings (persistent task↔tmux) ─────────
+
+function saveSessionMapping(taskId, tmuxSessionName, sessionName) {
+  // Upsert: if mapping already exists, update it
+  const existing = getDb().prepare('SELECT id FROM session_mappings WHERE task_id = ?').get(taskId);
+  if (existing) {
+    getDb().prepare(`
+      UPDATE session_mappings SET tmux_session_name = ?, session_name = ?, status = 'active', ended_at = NULL
+      WHERE task_id = ?
+    `).run(tmuxSessionName, sessionName, taskId);
+  } else {
+    getDb().prepare(`
+      INSERT INTO session_mappings (task_id, tmux_session_name, session_name) VALUES (?, ?, ?)
+    `).run(taskId, tmuxSessionName, sessionName);
+  }
+}
+
+function getSessionMapping(taskId) {
+  return getDb().prepare('SELECT * FROM session_mappings WHERE task_id = ?').get(taskId) || null;
+}
+
+function getActiveSessionMappings(sessionName) {
+  if (sessionName) {
+    return getDb().prepare(
+      "SELECT * FROM session_mappings WHERE session_name = ? AND status = 'active'"
+    ).all(sessionName);
+  }
+  return getDb().prepare("SELECT * FROM session_mappings WHERE status = 'active'").all();
+}
+
+function endSessionMapping(taskId) {
+  getDb().prepare(`
+    UPDATE session_mappings SET status = 'ended', ended_at = datetime('now') WHERE task_id = ?
+  `).run(taskId);
+}
+
+/**
+ * Restore activeExecs from DB on startup.
+ * Checks which 'running' tasks still have live tmux sessions.
+ */
+function restoreSessionMappings() {
+  const d = getDb();
+  const activeMappings = d.prepare(`
+    SELECT sm.*, t.status as task_status, t.type as task_type
+    FROM session_mappings sm
+    JOIN tasks t ON sm.task_id = t.id
+    WHERE sm.status = 'active'
+  `).all();
+
+  for (const m of activeMappings) {
+    const tmuxAlive = tmux.sessionExists(m.tmux_session_name);
+
+    if (!tmuxAlive) {
+      // tmux session gone — mark mapping as ended
+      endSessionMapping(m.task_id);
+
+      // If task is still 'running', mark as completed (session ended externally)
+      if (m.task_status === 'running') {
+        updateTaskStatus(m.task_id, 'completed', 'Session ended (tmux session no longer exists after restart)');
+      }
+      continue;
+    }
+
+    // tmux session still alive — restore to activeExecs
+    if (m.task_type === 'plan') {
+      // Restore to activePlans
+      activePlans.set(m.session_name, {
+        tmuxSession: m.tmux_session_name,
+        planTaskId: m.task_id,
+        startedAt: new Date(m.created_at).getTime(),
+        // Can't restore outputFile/promptFile — polling will detect completion via pane
+        outputFile: null,
+        promptFile: null,
+      });
+    } else if (m.task_status === 'running') {
+      // Determine mode from tmux session name
+      const mode = m.tmux_session_name.startsWith('csm-exec-') ? 'silent' : 'interactive';
+      activeExecs.set(m.task_id, {
+        tmuxSession: m.tmux_session_name,
+        sessionName: m.session_name,
+        execId: null, // can't restore, but not critical
+        mode,
+        startedAt: new Date(m.created_at).getTime(),
+      });
+    }
+  }
+}
+
 // ─── Task Planning (AI Integration) ────────────────────
 
 /**
@@ -416,6 +519,7 @@ function executeTaskInteractive(sessionName, taskId) {
 
   updateTaskStatus(taskId, 'running');
   const execId = logExecution(taskId, sessionName, execTmux);
+  saveSessionMapping(taskId, execTmux, sessionName);
 
   activeExecs.set(taskId, {
     tmuxSession: execTmux,
@@ -487,6 +591,7 @@ function executeTaskSilent(sessionName, taskId) {
 
   updateTaskStatus(taskId, 'running');
   const execId = logExecution(taskId, sessionName, execTmux);
+  saveSessionMapping(taskId, execTmux, sessionName);
 
   activeExecs.set(taskId, {
     tmuxSession: execTmux,
@@ -507,8 +612,45 @@ function executeTaskSilent(sessionName, taskId) {
 function getTaskExecStatus(sessionName, taskId) {
   const exec = activeExecs.get(taskId);
   if (!exec) {
-    const task = getDb().prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
-    return { status: task?.status || 'unknown' };
+    const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task) return { status: 'unknown' };
+
+    // Check persistent session mapping
+    const mapping = getSessionMapping(taskId);
+    const tmuxSessionName = mapping?.tmux_session_name || null;
+    const tmuxAlive = tmuxSessionName ? tmux.sessionExists(tmuxSessionName) : false;
+
+    // For running tasks with a live tmux session, get live output
+    if (task.status === 'running' && tmuxAlive) {
+      const paneOutput = tmux.capturePane(tmuxSessionName, null, null) || '';
+      return {
+        status: 'running',
+        tmuxSession: tmuxSessionName,
+        mode: tmuxSessionName.startsWith('csm-exec-') ? 'silent' : 'interactive',
+        preview: paneOutput,
+      };
+    }
+
+    // For tasks whose tmux session ended
+    if (mapping && mapping.status === 'ended') {
+      // Get last execution log
+      const execLog = getDb().prepare(
+        'SELECT * FROM execution_log WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+      ).get(taskId);
+      return {
+        status: task.status,
+        tmuxSession: tmuxSessionName,
+        tmuxAlive: false,
+        lastOutput: execLog?.output_summary || task.execution_log || null,
+      };
+    }
+
+    return {
+      status: task.status,
+      tmuxSession: tmuxSessionName,
+      tmuxAlive,
+      lastOutput: task.execution_log || task.result || null,
+    };
   }
 
   // Check if tmux session still exists
@@ -530,7 +672,8 @@ function getTaskExecStatus(sessionName, taskId) {
     if (promptVisible && (Date.now() - exec.startedAt > 30000)) {
       const cleanOutput = cleanAnsi(paneOutput);
       updateTaskStatus(taskId, 'completed', cleanOutput.substring(cleanOutput.length - 2000));
-      completeExecution(exec.execId, 'completed', cleanOutput.substring(cleanOutput.length - 2000));
+      if (exec.execId) completeExecution(exec.execId, 'completed', cleanOutput.substring(cleanOutput.length - 2000));
+      endSessionMapping(taskId);
       // Kill the tmux session now that the task is done
       tmux.killSession(exec.tmuxSession);
       activeExecs.delete(taskId);

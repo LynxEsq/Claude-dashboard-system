@@ -547,12 +547,33 @@ async function sendInput() {
   if (!State.selected) return;
   const input = el('termInput');
   if (!input.value.trim()) return;
+
+  // If a running task is selected, send input to its tmux session
+  if (State.selectedTask) {
+    const t = State.tasks.find(t => t.id === State.selectedTask);
+    if (t && t.status === 'running') {
+      await API.sendTaskInput(State.selectedTask, input.value);
+      input.value = '';
+      return;
+    }
+  }
+
   await API.sendInput(State.selected, input.value);
   input.value = '';
 }
 
 async function focusSelected() {
   if (!State.selected) return;
+
+  // If a running task is selected, focus its tmux session
+  if (State.selectedTask) {
+    const t = State.tasks.find(t => t.id === State.selectedTask);
+    if (t && t.status === 'running') {
+      await API.focusTask(State.selectedTask);
+      return;
+    }
+  }
+
   await API.focusSession(State.selected);
 }
 
@@ -590,6 +611,17 @@ async function openTerminal() {
 
 async function sendRawKeys(keys) {
   if (!State.selected) return;
+
+  // If a running task is selected, send keys to its tmux session
+  if (State.selectedTask) {
+    const t = State.tasks.find(t => t.id === State.selectedTask);
+    if (t && t.status === 'running') {
+      await API.sendTaskKeys(State.selectedTask, keys);
+      setTimeout(() => pollTaskOutput(State.selectedTask), 500);
+      return;
+    }
+  }
+
   await API.sendKeys(State.selected, keys);
   // Refresh terminal output after a short delay
   setTimeout(() => {

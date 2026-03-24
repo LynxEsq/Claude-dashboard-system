@@ -53,6 +53,13 @@ const API = {
     method: 'POST', headers: CT, body: JSON.stringify({ input })
   }),
   focusSession: (name) => apiFetch(`/api/sessions/${name}/focus`, { method: 'POST' }),
+  sendTaskInput: (taskId, input) => apiFetch(`/api/tasks/${taskId}/send`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ input })
+  }),
+  focusTask: (taskId) => apiFetch(`/api/tasks/${taskId}/focus`, { method: 'POST' }),
+  sendTaskKeys: (taskId, keys) => apiFetch(`/api/tasks/${taskId}/keys`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ keys })
+  }),
   restartSession: (name) => apiFetch(`/api/sessions/${name}/restart`, { method: 'POST' }),
   deleteProject: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/destroy`, { method: 'POST' }),
 

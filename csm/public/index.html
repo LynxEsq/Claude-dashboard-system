@@ -177,6 +177,11 @@
 </div>
 
 <!-- JS Modules -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+<script>
+  // Configure marked: disable raw HTML passthrough (already handled by esc())
+  marked.use({ breaks: true, gfm: true });
+</script>
 <script src="/js/state.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/render.js"></script>

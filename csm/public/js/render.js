@@ -4,6 +4,8 @@
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+/** Render markdown safely: escape HTML first (XSS prevention), then parse markdown */
+function md(s) { return typeof marked !== 'undefined' ? marked.parse(esc(s || '')) : esc(s || ''); }
 // Escape a string for safe use inside JS string literals in HTML attributes
 function escJs(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
 
@@ -72,7 +74,7 @@ function renderWishes() {
 
     return `
       <div class="${cls}">
-        <div class="wish-content">${esc(w.content)}</div>
+        <div class="wish-content markdown-body">${md(w.content)}</div>
         <div class="wish-meta">
           <span>${time} · ${w.processed ? 'processed' : 'new'}</span>
           <div class="wish-edit-actions">
@@ -121,10 +123,9 @@ function renderTasks() {
     }
 
     const expanded = State.selectedTask === t.id;
-    const descText = esc(t.description);
     const descHtml = expanded
-      ? `<div class="task-desc expanded">${descText}</div>`
-      : `<div class="task-desc">${descText.substring(0, 120)}${descText.length > 120 ? '...' : ''}</div>`;
+      ? `<div class="task-desc expanded markdown-body">${md(t.description)}</div>`
+      : `<div class="task-desc">${esc(t.description).substring(0, 120)}${(t.description || '').length > 120 ? '...' : ''}</div>`;
 
     return `
       <div class="task-item ${active}" onclick="selectTask(${t.id})">

@@ -1,133 +1,209 @@
 # CSM — Claude Session Manager
 
-A real-time monitoring and management system for multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions running in tmux. Control all your AI coding sessions from a single web dashboard.
+Единый центр управления для всех ваших Claude Code сессий. Мониторинг, задачи, pipeline — всё в одном веб-дашборде.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
 ![tmux](https://img.shields.io/badge/tmux-required-1BB91F?logo=tmux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
----
-
-## Overview
-
-CSM detects the status of each Claude Code session (Working, Needs Input, Idle, Error) by parsing tmux pane output in real time and surfaces everything through a WebSocket-powered web dashboard. It also provides a task pipeline — from wishes (inbox) to planned tasks to automated execution.
-
-### Key Features
-
-- **Live session monitoring** — polls tmux panes every 3 seconds, detects Claude's state via pattern matching
-- **Web dashboard** — multi-column SPA with projects, inbox, tasks, and terminal panels
-- **WebSocket updates** — instant status changes, alerts, and task events pushed to the browser
-- **Task pipeline** — Wishes → Planning → Tasks → Execution workflow for each project
-- **Token tracking** — real-time token usage with percentage bars and threshold alerts
-- **Session control** — create, kill, focus, and send input to sessions from the dashboard
-- **Alerts** — configurable timeouts for "Needs Input" and "Idle" states
-- **tmux integration** — one-click focus switching, recommended tmux config with plugin support
+> **[English version](README.en.md)**
 
 ---
 
-## Dashboard
+## Скриншоты
 
-The web interface runs on `http://localhost:9847` and provides:
+| Дашборд | Pipeline |
+|---------|----------|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Pipeline](docs/screenshots/pipeline.png) |
 
-| Column | Description |
-|--------|-------------|
-| **Projects** | Session cards with live status, token usage, and quick actions |
-| **Inbox** | Wishes (requests) per project — your backlog of ideas |
-| **Tasks** | Planned and prioritized tasks generated from wishes |
-| **Terminal** | Live output preview (200 lines) with key-sending capability |
-
-### Status Detection
-
-| Status | Indicator | Detected Patterns |
-|--------|-----------|-------------------|
-| **Working** | Yellow | Spinners, "thinking", tool use indicators |
-| **Needs Input** | Blue | `>` prompt, `?`, `(y/n)`, shell prompts |
-| **Error** | Red | "Error:", "Failed", "rate limit" |
-| **Idle** | Grey | No recent activity |
-| **Offline** | Dark | tmux session not found |
+| Терминал | Статусы |
+|----------|---------|
+| ![Terminal](docs/screenshots/terminal.png) | ![Statuses](docs/screenshots/statuses.png) |
 
 ---
 
-## Requirements
+## Что это и зачем
 
-- **Node.js** 18+
-- **tmux** (installed and running)
-- **macOS** or **Linux**
+Вы работаете с Claude Code над несколькими проектами одновременно. Каждый проект — отдельная tmux-сессия. Переключаетесь между ними, теряете контекст, забываете что где-то Claude ждёт ответа уже 10 минут.
+
+**CSM решает эту проблему.** Один веб-дашборд показывает все сессии разом: кто работает, кто ждёт ввода, где ошибка, сколько токенов потрачено. Можно отправлять ввод прямо из браузера, не переключая tmux.
+
+Но CSM — это не просто монитор. Это **система управления работой**:
+
+- Записываете идеи и пожелания в Inbox каждого проекта
+- AI превращает их в конкретные задачи
+- Задачи выполняются по одной, каждая в своей Claude-сессии
+- Вы наблюдаете за прогрессом из дашборда
 
 ---
 
-## Installation
+## Философия работы
 
-### Quick Start
+### Проекты = контексты
 
-```bash
-git clone https://github.com/your-username/claude-session-manager.git
-cd claude-session-manager/csm
-bash ../start.sh
+Каждый проект в CSM — это директория с кодом и привязанная к ней tmux-сессия. CSM не знает про ваш код напрямую; он наблюдает за tmux-панелью, где работает Claude Code, и определяет статус по паттернам в выводе терминала.
+
+```
+Проект "bms"  →  tmux-сессия "bms"  →  Claude Code работает внутри
+Проект "api"  →  tmux-сессия "api"  →  Claude Code ждёт ввода
 ```
 
-The `start.sh` script checks dependencies, installs npm packages, and launches the web dashboard.
+### Пожелания (Wishes) — ваш Inbox
 
-### Manual Installation
+Wish — это высокоуровневая хотелка. Не задача, не тикет, а мысль: *"хочу чтобы логин работал через OAuth"*, *"переписать тесты на vitest"*, *"добавить тёмную тему"*.
+
+Записывайте wishes когда мысль пришла — прямо в дашборде, в колонке Inbox выбранного проекта. Не нужно сразу формулировать чётко. Wishes копятся, пока вы не будете готовы их обработать.
+
+### Задачи (Tasks) — единицы работы
+
+Когда wishes накопились, запускаете **Plan** — AI анализирует все необработанные wishes и генерирует конкретные задачи:
+
+- Несколько связанных wishes могут стать одной задачей
+- Один большой wish может разбиться на несколько задач
+- Каждая задача достаточно конкретна, чтобы Claude Code выполнил её в одну сессию
+
+Задачи получают приоритет и описание, достаточное для автономного выполнения.
+
+### Выполнение — сессия на задачу
+
+Каждая задача выполняется в отдельной Claude Code сессии. CSM создаёт tmux-сессию, запускает Claude, передаёт промпт с описанием задачи и контекстом проекта. Два режима:
+
+| Режим | Когда использовать |
+|-------|-------------------|
+| **Тихий** (background) | Задача простая и однозначная. Claude работает автономно, вы проверяете результат после |
+| **Интерактивный** | Задача требует решений по ходу. CSM покажет когда Claude ждёт ввода, вы отвечаете из дашборда |
+
+---
+
+## Лучшие паттерны работы
+
+### Как формулировать wishes
+
+**Хорошо** — описываете *что хотите получить*, а не как делать:
+```
+Добавить экспорт отчётов в PDF с графиками
+Переписать авторизацию — сейчас токены хранятся в localStorage, нужно httpOnly cookies
+Тесты падают на CI но проходят локально, разобраться
+```
+
+**Плохо** — слишком размыто или наоборот диктуете реализацию:
+```
+Улучшить проект                          # слишком абстрактно
+Открой файл auth.js строка 47 и замени   # это не wish, это прямая команда
+```
+
+### Одна сессия vs параллельные
+
+| Ситуация | Подход |
+|----------|--------|
+| Связанные изменения в одном проекте | Одна сессия, wishes по очереди |
+| Независимые проекты | Параллельные сессии — CSM для этого и создан |
+| Большой рефакторинг | Одна сессия — Claude нужен полный контекст |
+| Много мелких фиксов в разных местах | Параллельные сессии с отдельными задачами |
+
+### На что смотреть в статусах
+
+| Статус | Что значит | Что делать |
+|--------|-----------|------------|
+| **Working** | Claude думает или пишет код | Ничего, ждать |
+| **Needs Input** | Claude задал вопрос или ждёт подтверждения | Переключиться и ответить (или ответить из дашборда) |
+| **Idle** | Сессия простаивает — задача завершена или Claude ждёт команды | Проверить результат, дать новую задачу |
+| **Error** | Ошибка, rate limit, проблема с подключением | Посмотреть терминал, решить проблему |
+| **Offline** | tmux-сессия не найдена | Создать заново или удалить из мониторинга |
+
+CSM отправляет алерты если сессия в статусе **Needs Input** дольше 5 минут или **Idle** дольше 10 минут.
+
+### Pipeline: wish → plan → execute
+
+```
+1. Записываете wishes в Inbox проекта
+         ↓
+2. Нажимаете "Plan" — AI группирует wishes в задачи
+         ↓
+3. Просматриваете задачи, корректируете приоритеты
+         ↓
+4. "Execute" — задачи выполняются по одной
+         ↓
+5. Проверяете результат, добавляете новые wishes
+```
+
+Необязательно использовать весь pipeline. Можно просто мониторить сессии и отправлять ввод — CSM работает и как простой мониторинг.
+
+---
+
+## Быстрый старт
+
+### Требования
+
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — установлен и авторизован (`claude` доступен в терминале). CSM управляет сессиями Claude Code, поэтому без него работать не будет
+- **Node.js** 18+
+- **tmux** (установлен и запущен)
+- **macOS** или **Linux**
+
+### Установка
+
+```bash
+git clone https://github.com/LynxEsq/Claude-dashboard-system.git
+cd Claude-dashboard-system
+bash start.sh
+```
+
+Скрипт `start.sh` проверит зависимости (Homebrew, Node.js, tmux), установит npm-пакеты и запустит дашборд.
+
+### Ручная установка
 
 ```bash
 cd csm
 npm install
-npm link          # makes 'csm' command available globally
+node src/index.js web    # дашборд на http://localhost:9847
 ```
 
-### tmux Setup (optional)
-
-Run the interactive setup wizard to configure tmux plugins and register project sessions:
+### Глобальная команда (опционально)
 
 ```bash
-bash templates/setup.sh
+cd csm && npm link       # делает команду 'csm' доступной в терминале
+csm web                  # теперь можно так
 ```
 
-Or apply the recommended tmux config manually:
+### Настройка tmux (опционально)
+
+Интерактивный мастер настройки плагинов и сессий:
 
 ```bash
-cp templates/tmux-csm.conf ~/.tmux-csm.conf
-echo 'source-file ~/.tmux-csm.conf' >> ~/.tmux.conf
-tmux source-file ~/.tmux.conf
+bash csm/templates/setup.sh
 ```
 
 ---
 
-## Usage
-
-### CLI Commands
+## CLI-команды
 
 ```bash
-csm web                              # Start web dashboard (localhost:9847)
-csm status                           # Show all session statuses
-csm status --watch                   # Auto-refresh every 3 seconds
+# Мониторинг
+csm status                           # статус всех сессий
+csm status --watch                   # автообновление каждые 3 секунды
+csm web                              # запустить веб-дашборд
 
-csm add <name> <tmux-session>        # Register a session to monitor
+# Управление сессиями
+csm add <name> <tmux-session>        # добавить сессию в мониторинг
 csm add bms bms-session --dir ~/projects/bms
-csm remove <name>                    # Unregister a session
-csm list                             # List configured sessions
-csm discover                         # Find available tmux sessions
+csm remove <name>                    # удалить сессию
+csm list                             # список сессий
+csm discover                         # найти tmux-сессии с Claude
 
-csm send <name> <text>               # Send input to a session
-csm focus <name>                     # Switch tmux focus to a session
-csm config --show                    # Display current configuration
-```
+# Взаимодействие
+csm send <name> <text>               # отправить текст в сессию
+csm focus <name>                     # переключить tmux-фокус
 
-### npm Scripts
-
-```bash
-npm start        # Run CLI
-npm run web      # Start web dashboard
-npm run dev      # Web dashboard (development mode)
+# Конфигурация
+csm config --show                    # показать настройки
 ```
 
 ---
 
-## Configuration
+## Конфигурация
 
-CSM stores its config in `~/.csm/config.json`:
+Настройки хранятся в `~/.csm/config.json`:
 
 ```json
 {
@@ -138,129 +214,91 @@ CSM stores its config in `~/.csm/config.json`:
     "needsInputTimeout": 300,
     "idleTimeout": 600,
     "tokenThreshold": 80
-  },
-  "sessions": []
+  }
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `port` | `9847` | Web dashboard port |
-| `pollInterval` | `3000` | Polling interval in ms |
-| `historyRetention` | `30` | Days to keep history |
-| `alerts.needsInputTimeout` | `300` | Seconds before "Needs Input" alert |
-| `alerts.idleTimeout` | `600` | Seconds before "Idle" alert |
-| `alerts.tokenThreshold` | `80` | Token usage % alert threshold |
-
----
-
-## Architecture
-
-```
-csm/
-├── src/
-│   ├── index.js              # CLI entry point (commander.js)
-│   ├── lib/
-│   │   ├── config.js         # Config management (~/.csm/)
-│   │   ├── detector.js       # Status detection via regex patterns
-│   │   ├── history.js        # SQLite logging & alerts
-│   │   ├── monitor.js        # Polling loop & event emitter
-│   │   ├── pipeline.js       # Wishes/Tasks/Execution pipeline
-│   │   └── tmux.js           # tmux command interface
-│   └── web/
-│       └── server.js         # Express + WebSocket server
-├── public/                   # Dashboard SPA
-│   ├── index.html
-│   ├── css/
-│   └── js/
-│       ├── state.js          # Centralized app state
-│       ├── api.js            # REST API client
-│       ├── render.js         # UI rendering
-│       ├── actions.js        # Event handlers
-│       └── websocket.js      # WebSocket client
-└── templates/
-    ├── CLAUDE.md             # Project context template
-    ├── setup.sh              # Interactive setup wizard
-    └── tmux-csm.conf         # Recommended tmux config
-```
-
-### Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Backend | Node.js, Express |
-| Database | SQLite (better-sqlite3) |
-| Real-time | WebSocket (ws) |
-| Frontend | Vanilla JS, CSS (dark theme) |
-| CLI | commander.js |
-| Terminal | tmux (via execSync) |
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| `port` | `9847` | Порт веб-дашборда |
+| `pollInterval` | `3000` | Интервал опроса tmux (мс) |
+| `historyRetention` | `30` | Дней хранения истории |
+| `alerts.needsInputTimeout` | `300` | Секунд до алерта "Needs Input" |
+| `alerts.idleTimeout` | `600` | Секунд до алерта "Idle" |
+| `alerts.tokenThreshold` | `80` | Порог алерта использования токенов (%) |
 
 ---
 
 ## API
 
-The web server exposes REST endpoints and a WebSocket connection.
+Веб-сервер предоставляет REST API и WebSocket-соединение на порту `9847`.
 
-### REST Endpoints
+### REST
 
-**Sessions**
-- `GET /api/sessions` — all session states
-- `GET /api/sessions/:name` — single session
-- `POST /api/sessions/:name/send` — send text input
-- `POST /api/sessions/:name/focus` — switch tmux focus
-- `POST /api/sessions/:name/keys` — send raw tmux keys
-- `POST /api/sessions/create` — create new session
-- `POST /api/sessions/:name/kill` — kill session
-
-**Pipeline**
-- `GET /api/pipeline/:name/wishes` — list wishes
-- `POST /api/pipeline/:name/wishes` — create wish
-- `GET /api/pipeline/:name/tasks` — list tasks
-- `POST /api/pipeline/:name/tasks` — create task
-- `POST /api/pipeline/:name/plan` — AI planning (wishes → tasks)
-- `POST /api/pipeline/:name/execute` — execute next pending task
-
-**History & Alerts**
-- `GET /api/history/:name/status` — status history (24h)
-- `GET /api/history/:name/tokens` — token usage history
-- `GET /api/alerts` — unacknowledged alerts
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| `GET` | `/api/sessions` | Все сессии и их состояние |
+| `POST` | `/api/sessions/:name/send` | Отправить текст в сессию |
+| `POST` | `/api/sessions/:name/focus` | Переключить tmux-фокус |
+| `POST` | `/api/sessions/create` | Создать новую сессию |
+| `POST` | `/api/sessions/:name/kill` | Завершить сессию |
+| `GET` | `/api/pipeline/:name/wishes` | Список wishes |
+| `POST` | `/api/pipeline/:name/wishes` | Создать wish |
+| `POST` | `/api/pipeline/:name/plan` | Запустить AI-планирование |
+| `POST` | `/api/pipeline/:name/execute` | Выполнить следующую задачу |
+| `GET` | `/api/history/:name/status` | История статусов (24ч) |
+| `GET` | `/api/alerts` | Неподтверждённые алерты |
 
 ### WebSocket
 
-Connect to `ws://localhost:9847`. Messages are JSON with `type` field:
+```
+ws://localhost:9847
+```
 
-- `update` — periodic state broadcast
-- `statusChange` — session status changed
-- `alert` — new alert triggered
-- `taskStarted` — task execution began
+Типы сообщений: `update`, `statusChange`, `alert`, `taskStarted`, `wishAdded`, `planApplied`.
 
----
-
-## Task Pipeline
-
-CSM provides a structured workflow to manage work across projects:
-
-1. **Wishes (Inbox)** — Write requests and ideas for a project
-2. **Planning** — AI analyzes wishes and generates actionable tasks
-3. **Tasks** — Prioritized, focused units of work
-4. **Execution** — Tasks run one by one, each in its own Claude session
-
-This pipeline lets you batch ideas, plan them in bulk, and execute systematically.
+Подробная документация API: [`csm/README.md`](csm/README.md)
 
 ---
 
-## Data Storage
+## Архитектура
 
-CSM uses two SQLite databases stored in `~/.csm/`:
+```
+csm/
+├── src/
+│   ├── index.js              # CLI (commander.js)
+│   ├── lib/
+│   │   ├── config.js         # Конфигурация (~/.csm/)
+│   │   ├── detector.js       # Детекция статуса через regex
+│   │   ├── history.js        # SQLite: логи, токены, алерты
+│   │   ├── monitor.js        # Polling loop, EventEmitter
+│   │   ├── pipeline.js       # Wishes → Tasks → Execution
+│   │   └── tmux.js           # Обёртка над tmux CLI
+│   └── web/
+│       └── server.js         # Express + WebSocket
+├── public/                   # SPA-дашборд
+│   ├── index.html
+│   ├── css/                  # Тёмная тема, CSS Grid
+│   └── js/                   # state, api, render, actions, websocket
+└── templates/
+    ├── setup.sh              # Мастер настройки tmux
+    └── tmux-csm.conf         # Рекомендуемый конфиг tmux
+```
 
-| Database | Purpose |
-|----------|---------|
-| `history.db` | Status logs, token snapshots, alerts |
-| `pipeline.db` | Wishes, tasks, execution logs |
+| Слой | Технология |
+|------|-----------|
+| Backend | Node.js, Express |
+| База данных | SQLite (better-sqlite3, WAL mode) |
+| Real-time | WebSocket (ws) |
+| Frontend | Vanilla JS, CSS Grid |
+| CLI | commander.js, chalk |
+| Терминал | tmux (execSync) |
+
+Данные хранятся в `~/.csm/`: `config.json`, `history.db`, `pipeline.db`.
 
 ---
 
-## License
+## Лицензия
 
 [MIT](LICENSE)
 
@@ -268,4 +306,4 @@ CSM uses two SQLite databases stored in `~/.csm/`:
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+Contributions welcome. Пожалуйста, откройте issue для обсуждения перед тем как делать PR.

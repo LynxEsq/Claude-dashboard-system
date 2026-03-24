@@ -36,3 +36,6 @@ npm-debug.log*
 # Build artifacts
 dist/
 build/
+
+# Working files (mockups, temp scripts)
+docs/mockups/

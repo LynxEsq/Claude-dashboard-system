@@ -1,17 +1,10 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const { CONFIG_DIR } = require('./config');
-const fs = require('fs');
+const { openDatabase } = require('./utils');
 
 let db = null;
 
 function getDb() {
   if (db) return db;
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-  db = new Database(path.join(CONFIG_DIR, 'history.db'));
-  db.pragma('journal_mode = WAL');
+  db = openDatabase('history.db');
   initTables();
   return db;
 }

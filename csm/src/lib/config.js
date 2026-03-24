@@ -79,8 +79,12 @@ function listSessions() {
   return load().sessions;
 }
 
+function findSession(name) {
+  return listSessions().find(s => s.name === name) || null;
+}
+
 module.exports = {
   CONFIG_DIR, CONFIG_FILE, DB_FILE,
-  load, save, addSession, removeSession, listSessions,
+  load, save, addSession, removeSession, listSessions, findSession,
   DEFAULT_CONFIG,
 };

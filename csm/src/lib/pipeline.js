@@ -12,23 +12,19 @@
  * 5. Wishes are marked "processed" after task creation
  */
 
-const Database = require('better-sqlite3');
+const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { CONFIG_DIR } = require('./config');
+const os = require('os');
 const tmux = require('./tmux');
 const config = require('./config');
+const { openDatabase, cleanAnsi } = require('./utils');
 
 let db = null;
 
 function getDb() {
   if (db) return db;
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-  db = new Database(path.join(CONFIG_DIR, 'pipeline.db'));
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = OFF');
+  db = openDatabase('pipeline.db', { foreignKeys: false });
   initTables();
   return db;
 }
@@ -338,8 +334,7 @@ function executeNextTask(sessionName) {
   }
 
   // Get the existing session config
-  const sessions = config.listSessions();
-  const sessConfig = sessions.find(s => s.name === sessionName);
+  const sessConfig = config.findSession(sessionName);
   if (!sessConfig) {
     return { started: false, reason: 'Session not found in config' };
   }
@@ -382,13 +377,8 @@ function executeTaskInteractive(sessionName, taskId) {
   if (!task) return { started: false, reason: 'Task not found' };
   if (task.status !== 'pending') return { started: false, reason: 'Task is not pending' };
 
-  const sessions = config.listSessions();
-  const sessConfig = sessions.find(s => s.name === sessionName);
+  const sessConfig = config.findSession(sessionName);
   const projectPath = sessConfig?.projectPath || null;
-
-  const { execSync } = require('child_process');
-  const os = require('os');
-  const path = require('path');
 
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
@@ -450,13 +440,8 @@ function executeTaskSilent(sessionName, taskId) {
   if (!task) return { started: false, reason: 'Task not found' };
   if (task.status !== 'pending') return { started: false, reason: 'Task is not pending' };
 
-  const sessions = config.listSessions();
-  const sessConfig = sessions.find(s => s.name === sessionName);
+  const sessConfig = config.findSession(sessionName);
   const projectPath = sessConfig?.projectPath || null;
-
-  const { execSync } = require('child_process');
-  const os = require('os');
-  const path = require('path');
 
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
@@ -532,15 +517,36 @@ function getTaskExecStatus(sessionName, taskId) {
     return { status: 'unknown', reason: 'Session disappeared' };
   }
 
-  // Interactive mode — always show live pane, user controls completion manually
+  // Interactive mode — show live pane; detect if Claude has finished (prompt visible)
   if (exec.mode === 'interactive') {
-    const paneOutput = tmux.capturePane(exec.tmuxSession, null, null);
+    const paneOutput = tmux.capturePane(exec.tmuxSession, null, null) || '';
+
+    // Check if Claude returned to prompt (task likely finished)
+    // Look for prompt chars on the last 3 lines
+    const lastLines = paneOutput.split('\n').slice(-3).join('\n');
+    const promptVisible = /❯/.test(lastLines) || /\$\s*$/.test(lastLines);
+
+    // If prompt is visible and enough time has passed (>30s), mark as completed
+    if (promptVisible && (Date.now() - exec.startedAt > 30000)) {
+      const cleanOutput = cleanAnsi(paneOutput);
+      updateTaskStatus(taskId, 'completed', cleanOutput.substring(cleanOutput.length - 2000));
+      completeExecution(exec.execId, 'completed', cleanOutput.substring(cleanOutput.length - 2000));
+      // Kill the tmux session now that the task is done
+      tmux.killSession(exec.tmuxSession);
+      activeExecs.delete(taskId);
+      return {
+        status: 'completed',
+        mode: 'interactive',
+        output: cleanOutput.substring(cleanOutput.length - 500),
+      };
+    }
+
     return {
       status: 'running',
       tmuxSession: exec.tmuxSession,
       mode: 'interactive',
       elapsed: Date.now() - exec.startedAt,
-      preview: paneOutput || '',
+      preview: paneOutput,
     };
   }
 
@@ -564,7 +570,7 @@ function getTaskExecStatus(sessionName, taskId) {
   }
 
   // Silent done
-  const cleanOutput = output.replace('___CSM_EXEC_DONE___', '').replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim();
+  const cleanOutput = cleanAnsi(output.replace('___CSM_EXEC_DONE___', ''));
   updateTaskStatus(taskId, 'completed', cleanOutput.substring(0, 2000));
   completeExecution(exec.execId, 'completed', cleanOutput.substring(0, 2000));
   tmux.killSession(exec.tmuxSession);
@@ -580,7 +586,6 @@ const activePlans = new Map();
  * Find the claude CLI binary path. Throws a user-friendly error if not found.
  */
 function findClaudeBin() {
-  const { execSync } = require('child_process');
   try {
     return execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
   } catch {
@@ -620,13 +625,8 @@ function planTasks(sessionName) {
   const existingTasks = getTasks(sessionName);
   const prompt = generatePlanningPrompt(sessionName, wishes, existingTasks);
 
-  const sessions = config.listSessions();
-  const sessConfig = sessions.find(s => s.name === sessionName);
+  const sessConfig = config.findSession(sessionName);
   const projectPath = sessConfig?.projectPath || null;
-
-  const { execSync } = require('child_process');
-  const os = require('os');
-  const path = require('path');
 
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) {
@@ -740,11 +740,7 @@ function getPlanStatus(sessionName) {
   }
 
   // Done! Parse result — strip ANSI escape codes and done marker
-  const cleanOutput = output
-    .replace('___CSM_PLAN_DONE___', '')
-    .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
-    .replace(/\x1B\].*?\x07/g, '')
-    .trim();
+  const cleanOutput = cleanAnsi(output.replace('___CSM_PLAN_DONE___', ''));
   console.log('[Plan] Raw output length:', cleanOutput.length);
   console.log('[Plan] Raw output (last 300):', cleanOutput.substring(cleanOutput.length - 300));
   const tasksJson = extractJson(cleanOutput);
@@ -921,8 +917,26 @@ function cleanSession(sessionName) {
   }
   d.prepare('DELETE FROM tasks WHERE session_name = ?').run(sessionName);
   d.prepare('DELETE FROM wishes WHERE session_name = ?').run(sessionName);
+
   // Clean active plan if any
   activePlans.delete(sessionName);
+
+  // Clean active task executions for this session
+  for (const [taskId, exec] of activeExecs) {
+    if (exec.sessionName === sessionName) {
+      tmux.killSession(exec.tmuxSession);
+      activeExecs.delete(taskId);
+    }
+  }
+
+  // Kill any remaining pipeline tmux sessions for this project
+  const safeName = tmux.safeTmuxName(sessionName);
+  const allTmux = tmux.listTmuxSessions();
+  for (const s of allTmux) {
+    if (s.startsWith(`csm-task-${safeName}`) || s.startsWith(`csm-exec-${safeName}`) || s.startsWith(`csm-plan-${safeName}`)) {
+      tmux.killSession(s);
+    }
+  }
 }
 
 function close() {

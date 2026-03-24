@@ -21,6 +21,7 @@ function connectWS() {
       case 'state':
         State.sessions = msg.data;
         renderProjects();
+        loadAllTaskCounts();
         break;
 
       case 'update':
@@ -46,10 +47,32 @@ function connectWS() {
         if (msg.data.sessionName === State.selected) loadWishes();
         break;
 
+      case 'planStarted':
+        State.planningProjects.add(msg.data.sessionName);
+        renderProjects();
+        break;
+
+      case 'planFinished':
+        State.planningProjects.delete(msg.data.sessionName);
+        renderProjects();
+        break;
+
       case 'taskCreated':
-      case 'planApplied':
       case 'taskStarted':
-        if (msg.data.sessionName === State.selected) loadTasks();
+        if (msg.data.sessionName === State.selected) {
+          loadTasks();
+        } else {
+          reloadTaskCountsFor(msg.data.sessionName);
+        }
+        break;
+
+      case 'planApplied':
+        State.planningProjects.delete(msg.data.sessionName);
+        if (msg.data.sessionName === State.selected) {
+          loadTasks();
+        } else {
+          reloadTaskCountsFor(msg.data.sessionName);
+        }
         break;
     }
   };

@@ -293,11 +293,17 @@ function start(port = 9847, autoOpen = true) {
 
   app.post('/api/pipeline/:name/plan', safe((req, res) => {
     const result = pipeline.planTasks(req.params.name);
+    if (result.planned) {
+      broadcast(wss, { type: 'planStarted', data: { sessionName: req.params.name, tmuxSession: result.tmuxSession } });
+    }
     res.json(result);
   }));
 
   app.get('/api/pipeline/:name/plan/status', safe((req, res) => {
     const result = pipeline.getPlanStatus(req.params.name);
+    if (result.status === 'done' || result.status === 'error') {
+      broadcast(wss, { type: 'planFinished', data: { sessionName: req.params.name, status: result.status } });
+    }
     res.json(result);
   }));
 
@@ -397,8 +403,87 @@ function start(port = 9847, autoOpen = true) {
 
   app.use((err, req, res, _next) => {
     console.error(`[API Error] ${req.method} ${req.path}:`, err.message);
-    res.status(500).json({ error: err.message });
+
+    const classified = classifyError(err);
+    res.status(classified.status).json({
+      error: classified.message,
+      code: classified.code,
+      hint: classified.hint || null,
+    });
   });
+
+  function classifyError(err) {
+    const msg = err.message || '';
+    const code = err.code || '';
+
+    // PipelineError — already user-friendly
+    if (err.name === 'PipelineError') {
+      return { status: 500, message: msg, code: err.code };
+    }
+
+    // Network errors
+    if (code === 'ECONNRESET' || msg.includes('ECONNRESET')) {
+      return {
+        status: 502, code: 'ECONNRESET',
+        message: 'Соединение с API было сброшено',
+        hint: 'Проверьте подключение к интернету и доступность API. Если проблема повторяется — возможно, API-ключ недействителен или превышен лимит запросов.',
+      };
+    }
+    if (code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED')) {
+      return {
+        status: 502, code: 'ECONNREFUSED',
+        message: 'Не удалось подключиться к API',
+        hint: 'API-сервер недоступен. Проверьте подключение к интернету.',
+      };
+    }
+    if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || msg.includes('ETIMEDOUT')) {
+      return {
+        status: 504, code: 'ETIMEDOUT',
+        message: 'Превышено время ожидания ответа от API',
+        hint: 'Попробуйте повторить операцию позже.',
+      };
+    }
+    if (code === 'ENOTFOUND' || msg.includes('ENOTFOUND')) {
+      return {
+        status: 502, code: 'ENOTFOUND',
+        message: 'DNS: не удалось найти сервер API',
+        hint: 'Проверьте подключение к интернету и DNS-настройки.',
+      };
+    }
+
+    // Claude CLI not found
+    if (msg.includes('claude') && (msg.includes('not found') || msg.includes('ENOENT'))) {
+      return {
+        status: 500, code: 'CLAUDE_NOT_FOUND',
+        message: 'Claude CLI не найден',
+        hint: 'Установите: npm install -g @anthropic-ai/claude-code',
+      };
+    }
+
+    // tmux errors
+    if (msg.includes('tmux') && (msg.includes('no server') || msg.includes('not found'))) {
+      return {
+        status: 500, code: 'TMUX_ERROR',
+        message: 'tmux не доступен',
+        hint: 'Убедитесь, что tmux запущен: tmux new-session -d',
+      };
+    }
+
+    // Rate limiting
+    if (msg.includes('rate limit') || msg.includes('429') || msg.includes('Too Many Requests')) {
+      return {
+        status: 429, code: 'RATE_LIMITED',
+        message: 'Превышен лимит запросов к API',
+        hint: 'Подождите несколько минут и попробуйте снова.',
+      };
+    }
+
+    // Default
+    return {
+      status: 500, code: 'INTERNAL_ERROR',
+      message: msg || 'Внутренняя ошибка сервера',
+    };
+  }
 
   // ─── WebSocket ───────────────────────────────────────
 

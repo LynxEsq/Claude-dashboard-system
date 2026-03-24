@@ -24,6 +24,17 @@
   <div id="tmuxPanelList"></div>
 </div>
 
+<!-- Project context menu -->
+<div class="ctx-menu" id="projectCtxMenu">
+  <div class="ctx-item" onclick="ctxAction('select')">Select</div>
+  <div class="ctx-item" onclick="ctxAction('focus')">Focus tmux</div>
+  <div class="ctx-item" onclick="ctxAction('terminal')">Open Terminal</div>
+  <div class="ctx-item" onclick="ctxAction('perms')">Permissions</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('untrack')">Untrack</div>
+  <div class="ctx-item ctx-danger" onclick="ctxAction('delete')">Delete</div>
+</div>
+
 <div class="columns">
 
   <!-- Column 1: Projects -->
@@ -182,6 +193,7 @@
   // Configure marked: disable raw HTML passthrough (already handled by esc())
   marked.use({ breaks: true, gfm: true });
 </script>
+<div class="toast-container" id="toastContainer"></div>
 <script src="/js/state.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/render.js"></script>
@@ -190,8 +202,8 @@
 <script>
   // ─── Init ──────────────────────────────────────
   connectWS();
-  API.getSessions().then(d => { State.sessions = d; renderProjects(); });
-  API.getAlerts().then(d => { State.alerts = d; renderAlerts(); });
+  API.getSessions().then(d => { State.sessions = d; renderProjects(); loadAllTaskCounts(); }).catch(err => handleApiError(err, 'init'));
+  API.getAlerts().then(d => { State.alerts = d; renderAlerts(); }).catch(() => {});
 
   // Modal close on backdrop / Esc
   document.querySelectorAll('.modal-overlay').forEach(m => {

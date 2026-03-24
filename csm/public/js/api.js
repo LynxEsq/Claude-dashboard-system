@@ -1,76 +1,120 @@
 /**
  * API client for CSM backend
  */
+
+const CT = { 'Content-Type': 'application/json' };
+
+/**
+ * Wrapper around fetch that handles HTTP errors and network failures.
+ * Returns parsed JSON on success, throws ApiError on failure.
+ */
+class ApiError extends Error {
+  constructor(message, code, hint) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code || 'UNKNOWN';
+    this.hint = hint || null;
+  }
+}
+
+async function apiFetch(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (err) {
+    // Network-level error (no response at all)
+    if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+      throw new ApiError(
+        'Нет соединения с сервером CSM',
+        'NETWORK_ERROR',
+        'Убедитесь, что CSM сервер запущен (node src/index.js web)'
+      );
+    }
+    throw new ApiError(err.message, 'FETCH_ERROR');
+  }
+
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const msg = data?.error || `HTTP ${res.status}`;
+    throw new ApiError(msg, data?.code || 'HTTP_' + res.status, data?.hint || null);
+  }
+
+  return data;
+}
+
 const API = {
   // ─── Sessions ────────────────────────────────
-  getSessions: () => fetch('/api/sessions').then(r => r.json()),
-  createSession: (data) => fetch('/api/sessions/create', {
+  getSessions: () => apiFetch('/api/sessions'),
+  createSession: (data) => apiFetch('/api/sessions/create', {
     method: 'POST', headers: CT, body: JSON.stringify(data)
-  }).then(r => r.json()),
-  sendInput: (name, input) => fetch(`/api/sessions/${name}/send`, {
+  }),
+  sendInput: (name, input) => apiFetch(`/api/sessions/${name}/send`, {
     method: 'POST', headers: CT, body: JSON.stringify({ input })
-  }).then(r => r.json()),
-  focusSession: (name) => fetch(`/api/sessions/${name}/focus`, { method: 'POST' }).then(r => r.json()),
-  restartSession: (name) => fetch(`/api/sessions/${name}/restart`, { method: 'POST' }).then(r => r.json()),
-  deleteProject: (name) => fetch(`/api/sessions/${encodeURIComponent(name)}/destroy`, { method: 'POST' }).then(r => r.json()),
+  }),
+  focusSession: (name) => apiFetch(`/api/sessions/${name}/focus`, { method: 'POST' }),
+  restartSession: (name) => apiFetch(`/api/sessions/${name}/restart`, { method: 'POST' }),
+  deleteProject: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/destroy`, { method: 'POST' }),
 
   // ─── Wishes ──────────────────────────────────
-  getWishes: (name) => fetch(`/api/pipeline/${name}/wishes`).then(r => r.json()),
-  addWish: (name, content) => fetch(`/api/pipeline/${name}/wishes`, {
+  getWishes: (name) => apiFetch(`/api/pipeline/${name}/wishes`),
+  addWish: (name, content) => apiFetch(`/api/pipeline/${name}/wishes`, {
     method: 'POST', headers: CT, body: JSON.stringify({ content })
-  }).then(r => r.json()),
-  updateWish: (id, content) => fetch(`/api/pipeline/wishes/${id}`, {
+  }),
+  updateWish: (id, content) => apiFetch(`/api/pipeline/wishes/${id}`, {
     method: 'PUT', headers: CT, body: JSON.stringify({ content })
-  }).then(r => r.json()),
-  deleteWish: (id) => fetch(`/api/pipeline/wishes/${id}`, { method: 'DELETE' }).then(r => r.json()),
+  }),
+  deleteWish: (id) => apiFetch(`/api/pipeline/wishes/${id}`, { method: 'DELETE' }),
 
   // ─── Tasks ───────────────────────────────────
   getTasks: (name, status) => {
     const qs = status ? `?status=${status}` : '';
-    return fetch(`/api/pipeline/${name}/tasks${qs}`).then(r => r.json());
+    return apiFetch(`/api/pipeline/${name}/tasks${qs}`);
   },
-  addTask: (name, data) => fetch(`/api/pipeline/${name}/tasks`, {
+  addTask: (name, data) => apiFetch(`/api/pipeline/${name}/tasks`, {
     method: 'POST', headers: CT, body: JSON.stringify(data)
-  }).then(r => r.json()),
-  updateTask: (id, data) => fetch(`/api/pipeline/tasks/${id}`, {
+  }),
+  updateTask: (id, data) => apiFetch(`/api/pipeline/tasks/${id}`, {
     method: 'PUT', headers: CT, body: JSON.stringify(data)
-  }).then(r => r.json()),
-  deleteTask: (id) => fetch(`/api/pipeline/tasks/${id}`, { method: 'DELETE' }).then(r => r.json()),
+  }),
+  deleteTask: (id) => apiFetch(`/api/pipeline/tasks/${id}`, { method: 'DELETE' }),
 
   // ─── Pipeline ────────────────────────────────
-  plan: (name) => fetch(`/api/pipeline/${name}/plan`, { method: 'POST' }).then(r => r.json()),
-  planStatus: (name) => fetch(`/api/pipeline/${name}/plan/status`).then(r => r.json()),
-  applyPlan: (name, data) => fetch(`/api/pipeline/${name}/apply-plan`, {
+  plan: (name) => apiFetch(`/api/pipeline/${name}/plan`, { method: 'POST' }),
+  planStatus: (name) => apiFetch(`/api/pipeline/${name}/plan/status`),
+  applyPlan: (name, data) => apiFetch(`/api/pipeline/${name}/apply-plan`, {
     method: 'POST', headers: CT, body: JSON.stringify(data)
-  }).then(r => r.json()),
-  executeInteractive: (name, taskId) => fetch(`/api/pipeline/${name}/execute-interactive`, {
+  }),
+  executeInteractive: (name, taskId) => apiFetch(`/api/pipeline/${name}/execute-interactive`, {
     method: 'POST', headers: CT, body: JSON.stringify({ taskId })
-  }).then(r => r.json()),
-  executeNext: (name) => fetch(`/api/pipeline/${name}/execute`, { method: 'POST' }).then(r => r.json()),
-  executeSilent: (name, taskId) => fetch(`/api/pipeline/${name}/execute-silent`, {
+  }),
+  executeNext: (name) => apiFetch(`/api/pipeline/${name}/execute`, { method: 'POST' }),
+  executeSilent: (name, taskId) => apiFetch(`/api/pipeline/${name}/execute-silent`, {
     method: 'POST', headers: CT, body: JSON.stringify({ taskId })
-  }).then(r => r.json()),
-  taskExecStatus: (name, taskId) => fetch(`/api/pipeline/${name}/task-status/${taskId}`).then(r => r.json()),
+  }),
+  taskExecStatus: (name, taskId) => apiFetch(`/api/pipeline/${name}/task-status/${taskId}`),
 
   // ─── Terminal ───────────────────────────────
-  sendKeys: (name, keys) => fetch(`/api/sessions/${name}/keys`, {
+  sendKeys: (name, keys) => apiFetch(`/api/sessions/${name}/keys`, {
     method: 'POST', headers: CT, body: JSON.stringify({ keys })
-  }).then(r => r.json()),
-  openTerminal: (name) => fetch(`/api/sessions/${name}/terminal`, { method: 'POST' }).then(r => r.json()),
+  }),
+  openTerminal: (name) => apiFetch(`/api/sessions/${name}/terminal`, { method: 'POST' }),
 
   // ─── Permissions ──────────────────────────────
-  getPermissions: (name) => fetch(`/api/sessions/${encodeURIComponent(name)}/permissions`).then(r => r.json()),
-  setPermissions: (name, permissions) => fetch(`/api/sessions/${encodeURIComponent(name)}/permissions`, {
+  getPermissions: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/permissions`),
+  setPermissions: (name, permissions) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/permissions`, {
     method: 'POST', headers: CT, body: JSON.stringify({ permissions })
-  }).then(r => r.json()),
+  }),
 
   // ─── Tmux ─────────────────────────────────────
-  getTmuxSessions: () => fetch('/api/tmux/sessions').then(r => r.json()),
-  openTmuxSession: (name, tmuxName) => fetch(`/api/sessions/${encodeURIComponent(name || '_')}/terminal?tmux=${encodeURIComponent(tmuxName)}`, { method: 'POST', headers: CT, body: '{}' }).then(r => r.json()),
+  getTmuxSessions: () => apiFetch('/api/tmux/sessions'),
+  openTmuxSession: (name, tmuxName) => apiFetch(`/api/sessions/${encodeURIComponent(name || '_')}/terminal?tmux=${encodeURIComponent(tmuxName)}`, { method: 'POST', headers: CT, body: '{}' }),
+  trackSession: (name, tmuxSession, projectPath) => apiFetch('/api/config/session', {
+    method: 'POST', headers: CT, body: JSON.stringify({ name, tmuxSession, projectPath })
+  }),
+  untrackSession: (name) => apiFetch(`/api/config/session/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // ─── Alerts ──────────────────────────────────
-  getAlerts: () => fetch('/api/alerts').then(r => r.json()),
-  ackAlert: (id) => fetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' }).then(r => r.json()),
+  getAlerts: () => apiFetch('/api/alerts'),
+  ackAlert: (id) => apiFetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' }),
 };
-
-const CT = { 'Content-Type': 'application/json' };

@@ -7,6 +7,7 @@
 function selectProject(name) {
   State.selected = name;
   State.selectedTask = null;
+  State.selectedWish = null;
   State.editingWish = null;
   State.editingTask = null;
   renderProjects();
@@ -29,11 +30,14 @@ async function checkPlanStatus() {
     const status = await API.planStatus(State.selected);
     if (status.status === 'running') {
       State.planningSession = status.tmuxSession;
+      State.planningProjects.add(State.selected);
+      renderProjects();
       el('planBtn').disabled = true;
       el('planBtn').textContent = 'Planning...';
       pollPlanStatus();
     } else {
       State.planningSession = null;
+      State.planningProjects.delete(State.selected);
     }
   } catch {}
 }
@@ -57,7 +61,9 @@ function selectTask(id) {
 
     if (t.status === 'running') {
       // Poll live output from task's tmux session
-      el('termBody').textContent = t.execution_log || 'Running...';
+      // Show session's terminal output as fallback instead of bare "Running..."
+      const sessionOutput = State.sessions[State.selected]?.lastOutput;
+      el('termBody').textContent = t.execution_log || sessionOutput || 'Running... waiting for output';
       pollTaskOutput(id);
     } else {
       el('termBody').textContent = t.execution_log || t.description;
@@ -87,18 +93,80 @@ async function pollTaskOutput(taskId) {
   } catch {}
 }
 
+// ─── Wish ↔ Task Links ──────────────────────────
+
+function selectWish(wishId) {
+  // Toggle off if same wish clicked
+  if (State.selectedWish === wishId) {
+    clearWishSelection();
+    return;
+  }
+  State.selectedWish = wishId;
+  renderWishes();
+  renderTasks();
+}
+
+function clearWishSelection() {
+  State.selectedWish = null;
+  renderWishes();
+  renderTasks();
+}
+
+function getLinkedTaskIds(wish) {
+  if (!wish || !wish.task_ids) return [];
+  try { return JSON.parse(wish.task_ids); } catch { return []; }
+}
+
+function getLinkedWishIds(task) {
+  if (!task || !task.wish_ids) return [];
+  try { return JSON.parse(task.wish_ids); } catch { return []; }
+}
+
 // ─── Data Loading ────────────────────────────────
 
 async function loadWishes() {
   if (!State.selected) return;
-  State.wishes = await API.getWishes(State.selected);
-  renderWishes();
+  try {
+    State.wishes = await API.getWishes(State.selected);
+    renderWishes();
+  } catch (err) { handleApiError(err, 'loadWishes'); }
 }
 
 async function loadTasks() {
   if (!State.selected) return;
-  State.tasks = await API.getTasks(State.selected);
-  renderTasks();
+  try {
+    State.tasks = await API.getTasks(State.selected);
+    updateTaskCountsFromTasks(State.selected, State.tasks);
+    renderTasks();
+    renderProjects();
+  } catch (err) { handleApiError(err, 'loadTasks'); }
+}
+
+async function loadAllTaskCounts() {
+  const names = Object.keys(State.sessions);
+  await Promise.all(names.map(async (name) => {
+    try {
+      const tasks = await API.getTasks(name);
+      updateTaskCountsFromTasks(name, tasks);
+    } catch (e) { /* ignore */ }
+  }));
+  renderProjects();
+}
+
+async function reloadTaskCountsFor(name) {
+  try {
+    const tasks = await API.getTasks(name);
+    updateTaskCountsFromTasks(name, tasks);
+    renderProjects();
+  } catch (e) { /* ignore */ }
+}
+
+function updateTaskCountsFromTasks(name, tasks) {
+  const counts = { completed: 0, running: 0, pending: 0, failed: 0, total: tasks.length };
+  for (const t of tasks) {
+    if (counts[t.status] !== undefined) counts[t.status]++;
+  }
+  State.taskCounts[name] = counts;
 }
 
 // ─── Wishes CRUD ─────────────────────────────────
@@ -107,9 +175,11 @@ async function addWish() {
   if (!State.selected) return;
   const text = el('wishText').value.trim();
   if (!text) return;
-  await API.addWish(State.selected, text);
-  el('wishText').value = '';
-  loadWishes();
+  try {
+    await API.addWish(State.selected, text);
+    el('wishText').value = '';
+    loadWishes();
+  } catch (err) { handleApiError(err, 'addWish'); }
 }
 
 function editWish(id) {
@@ -132,15 +202,19 @@ async function saveWish(id) {
   if (!ta) return;
   const content = ta.value.trim();
   if (!content) return;
-  await API.updateWish(id, content);
-  State.editingWish = null;
-  loadWishes();
+  try {
+    await API.updateWish(id, content);
+    State.editingWish = null;
+    loadWishes();
+  } catch (err) { handleApiError(err, 'saveWish'); }
 }
 
 async function removeWish(id) {
   if (!confirm('Delete this wish?')) return;
-  await API.deleteWish(id);
-  loadWishes();
+  try {
+    await API.deleteWish(id);
+    loadWishes();
+  } catch (err) { handleApiError(err, 'removeWish'); }
 }
 
 // ─── Tasks CRUD ──────────────────────────────────
@@ -163,25 +237,33 @@ async function saveTask(id) {
   const title = document.getElementById(`task-edit-title-${id}`)?.value.trim();
   const desc = document.getElementById(`task-edit-desc-${id}`)?.value.trim();
   if (!title) return;
-  await API.updateTask(id, { title, description: desc });
-  State.editingTask = null;
-  loadTasks();
+  try {
+    await API.updateTask(id, { title, description: desc });
+    State.editingTask = null;
+    loadTasks();
+  } catch (err) { handleApiError(err, 'saveTask'); }
 }
 
 async function removeTask(id) {
   if (!confirm('Delete this task?')) return;
-  await API.deleteTask(id);
-  loadTasks();
+  try {
+    await API.deleteTask(id);
+    loadTasks();
+  } catch (err) { handleApiError(err, 'removeTask'); }
 }
 
 async function completeTask(id) {
-  await API.updateTask(id, { status: 'completed' });
-  loadTasks();
+  try {
+    await API.updateTask(id, { status: 'completed' });
+    loadTasks();
+  } catch (err) { handleApiError(err, 'completeTask'); }
 }
 
 async function reopenTask(id) {
-  await API.updateTask(id, { status: 'pending' });
-  loadTasks();
+  try {
+    await API.updateTask(id, { status: 'pending' });
+    loadTasks();
+  } catch (err) { handleApiError(err, 'reopenTask'); }
 }
 
 async function addManualTask() {
@@ -191,12 +273,14 @@ async function addManualTask() {
   const priority = parseInt(el('t-priority').value) || 5;
   if (!title) return alert('Title is required');
 
-  await API.addTask(State.selected, { title, description: desc, priority });
-  hideModal('task');
-  el('t-title').value = '';
-  el('t-desc').value = '';
-  el('t-priority').value = '5';
-  loadTasks();
+  try {
+    await API.addTask(State.selected, { title, description: desc, priority });
+    hideModal('task');
+    el('t-title').value = '';
+    el('t-desc').value = '';
+    el('t-priority').value = '5';
+    loadTasks();
+  } catch (err) { handleApiError(err, 'addManualTask'); }
 }
 
 // ─── Pipeline Actions ────────────────────────────
@@ -209,7 +293,7 @@ async function planFromWishes() {
   try {
     const result = await API.plan(State.selected);
     if (!result.planned && result.status !== 'running') {
-      alert(result.reason || 'Nothing to plan');
+      showToast(result.reason || 'Нечего планировать — добавьте wishes', 'info');
       el('planBtn').disabled = false;
       el('planBtn').textContent = 'Plan';
       return;
@@ -217,12 +301,14 @@ async function planFromWishes() {
 
     // Show planning session info
     State.planningSession = result.tmuxSession;
+    State.planningProjects.add(State.selected);
+    renderProjects();
     el('planBtn').innerHTML = 'Planning... <span style="font-size:9px;opacity:0.7">click Terminal to watch</span>';
 
     // Poll for completion
     pollPlanStatus();
   } catch (err) {
-    alert('Planning error: ' + err.message);
+    handleApiError(err, 'planFromWishes');
     el('planBtn').disabled = false;
     el('planBtn').textContent = 'Plan';
   }
@@ -248,7 +334,7 @@ async function pollPlanStatus() {
       el('planBtn').textContent = `Plan (${status.count || 0} tasks created)`;
       setTimeout(() => { el('planBtn').textContent = 'Plan'; }, 3000);
     } else if (status.status === 'error') {
-      alert('Planning failed: ' + (status.reason || 'Unknown error'));
+      showToast('Планирование не удалось: ' + (status.reason || 'Неизвестная ошибка'), 'error');
       el('planBtn').disabled = false;
       el('planBtn').textContent = 'Plan';
     } else {
@@ -262,6 +348,8 @@ async function pollPlanStatus() {
   }
 
   State.planningSession = null;
+  if (State.selected) State.planningProjects.delete(State.selected);
+  renderProjects();
 }
 
 function openPlanningTerminal() {
@@ -272,23 +360,27 @@ function openPlanningTerminal() {
 
 async function runTaskInteractive(taskId) {
   if (!State.selected) return;
-  const result = await API.executeInteractive(State.selected, taskId);
-  if (!result.started) {
-    alert(result.reason || 'Cannot start');
-    return;
-  }
-  loadTasks();
+  try {
+    const result = await API.executeInteractive(State.selected, taskId);
+    if (!result.started) {
+      showToast(result.reason || 'Не удалось запустить задачу', 'warning');
+      return;
+    }
+    loadTasks();
+  } catch (err) { handleApiError(err, 'runTaskInteractive'); }
 }
 
 async function runTaskSilent(taskId) {
   if (!State.selected) return;
-  const result = await API.executeSilent(State.selected, taskId);
-  if (!result.started) {
-    alert(result.reason || 'Cannot start');
-    return;
-  }
-  loadTasks();
-  pollTaskExec(taskId, result.tmuxSession);
+  try {
+    const result = await API.executeSilent(State.selected, taskId);
+    if (!result.started) {
+      showToast(result.reason || 'Не удалось запустить задачу', 'warning');
+      return;
+    }
+    loadTasks();
+    pollTaskExec(taskId, result.tmuxSession);
+  } catch (err) { handleApiError(err, 'runTaskSilent'); }
 }
 
 async function pollTaskExec(taskId, tmuxSession) {
@@ -306,9 +398,11 @@ async function pollTaskExec(taskId, tmuxSession) {
 
 async function executeNext() {
   if (!State.selected) return;
-  const result = await API.executeNext(State.selected);
-  if (result.started) loadTasks();
-  else alert(result.reason || 'Cannot start');
+  try {
+    const result = await API.executeNext(State.selected);
+    if (result.started) loadTasks();
+    else showToast(result.reason || 'Нет задач для выполнения', 'info');
+  } catch (err) { handleApiError(err, 'executeNext'); }
 }
 
 // ─── Terminal Actions ────────────────────────────
@@ -394,35 +488,41 @@ async function createProject() {
   const name = el('c-name').value.trim();
   if (!name) return alert('Name is required');
 
-  const result = await API.createSession({
-    name,
-    projectPath: el('c-path').value.trim() || null,
-    startClaude: el('c-claude').checked,
-  });
+  try {
+    const result = await API.createSession({
+      name,
+      projectPath: el('c-path').value.trim() || null,
+      startClaude: el('c-claude').checked,
+    });
 
-  if (!result.success) return alert('Error: ' + result.error);
-  hideModal('create');
-  el('c-name').value = '';
-  el('c-path').value = '';
+    if (!result.success) {
+      showToast(result.error || 'Не удалось создать проект', 'error');
+      return;
+    }
+    hideModal('create');
+    el('c-name').value = '';
+    el('c-path').value = '';
+  } catch (err) { handleApiError(err, 'createProject'); }
 }
 
 // ─── Delete Project ──────────────────────────────
 
 async function deleteProject(name) {
   if (!confirm(`Delete project "${name}"?\nThis will kill tmux sessions and remove all wishes/tasks.`)) return;
-  await API.deleteProject(name);
-  if (State.selected === name) {
-    State.selected = null;
-    State.wishes = [];
-    State.tasks = [];
-  }
-  // Refresh
-  const d = await API.getSessions();
-  State.sessions = d;
-  renderProjects();
-  renderTerminal();
-  el('wishList').innerHTML = '<div class="empty-msg">Select a project</div>';
-  el('taskList').innerHTML = '<div class="empty-msg">Select a project</div>';
+  try {
+    await API.deleteProject(name);
+    if (State.selected === name) {
+      State.selected = null;
+      State.wishes = [];
+      State.tasks = [];
+    }
+    const d = await API.getSessions();
+    State.sessions = d;
+    renderProjects();
+    renderTerminal();
+    el('wishList').innerHTML = '<div class="empty-msg">Select a project</div>';
+    el('taskList').innerHTML = '<div class="empty-msg">Select a project</div>';
+  } catch (err) { handleApiError(err, 'deleteProject'); }
 }
 
 // ─── Live Mode ──────────────────────────────────
@@ -520,6 +620,9 @@ async function addCustomPerm() {
 
 // ─── Tmux Panel ─────────────────────────────────
 
+const SERVICE_SESSION_RE = /^csm-(exec|plan)-/;
+// STATUS_LABELS defined in state.js
+
 async function toggleTmuxPanel() {
   const panel = el('tmuxPanel');
   if (panel.classList.contains('visible')) {
@@ -527,33 +630,206 @@ async function toggleTmuxPanel() {
     return;
   }
 
+  await refreshTmuxPanelContent();
+  panel.classList.add('visible');
+}
+
+async function refreshTmuxPanelContent() {
   const data = await API.getTmuxSessions();
   const list = el('tmuxPanelList');
+
   if (data.all.length === 0) {
-    list.innerHTML = '<div class="empty-msg">No tmux sessions</div>';
-  } else {
-    list.innerHTML = data.all.map(name => {
-      const isTracked = data.tracked.includes(name);
+    list.innerHTML = '<div class="empty-msg">No tmux sessions found</div>';
+    return;
+  }
+
+  const showService = el('tmuxShowService')?.checked;
+  const tracked = data.tracked || [];
+  const serviceSessions = (data.untracked || []).filter(n => SERVICE_SESSION_RE.test(n));
+  const discoveredNonService = (data.untracked || []).filter(n => !SERVICE_SESSION_RE.test(n));
+
+  let html = '';
+
+  // --- Tracked section ---
+  if (tracked.length > 0) {
+    html += '<div class="tmux-section-header"><span>Tracked</span><span class="tmux-section-hint">monitored by CSM</span></div>';
+    html += tracked.map(tmuxName => {
+      const sessEntry = Object.entries(State.sessions).find(([, s]) => s.tmuxSession === tmuxName);
+      const csmName = sessEntry ? sessEntry[0] : null;
+      const status = sessEntry ? sessEntry[1].status : 'offline';
+      const statusLabel = STATUS_LABELS[status] || status;
+
       return `
-        <div class="tmux-panel-item" onclick="attachTmux('${escJs(name)}')">
-          <span class="tmux-panel-name">${esc(name)}</span>
-          ${isTracked ? '<span class="tmux-panel-tag">tracked</span>' : ''}
+        <div class="tmux-panel-item">
+          <div class="tmux-panel-left">
+            <div class="status-dot ${status}"></div>
+            <div class="tmux-panel-info">
+              <span class="tmux-panel-name">${esc(csmName || tmuxName)}</span>
+              ${csmName && csmName !== tmuxName ? `<span class="tmux-panel-sub">${esc(tmuxName)}</span>` : ''}
+            </div>
+            <span class="tmux-panel-status ${status}">${statusLabel}</span>
+          </div>
+          <div class="tmux-panel-actions">
+            ${csmName ? `<button class="btn sm" onclick="event.stopPropagation(); selectProject('${escJs(csmName)}'); closeTmuxPanel()" title="Select in dashboard">Select</button>` : ''}
+            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(tmuxName)}')" title="Open in Terminal.app">Terminal</button>
+            ${csmName ? `<button class="btn sm" onclick="event.stopPropagation(); focusTmuxSession('${escJs(csmName)}')" title="Switch tmux focus">Focus</button>` : ''}
+            ${csmName ? `<button class="btn sm danger" onclick="event.stopPropagation(); untrackSession('${escJs(csmName)}')" title="Stop monitoring (keeps tmux alive)">Untrack</button>` : ''}
+          </div>
         </div>
       `;
     }).join('');
   }
 
-  panel.classList.add('visible');
+  // --- Discovered (untracked, non-service) section ---
+  if (discoveredNonService.length > 0) {
+    html += '<div class="tmux-section-header"><span>Discovered</span><span class="tmux-section-hint">not tracked by CSM</span></div>';
+    html += discoveredNonService.map(name => `
+      <div class="tmux-panel-item">
+        <div class="tmux-panel-left">
+          <div class="status-dot offline"></div>
+          <div class="tmux-panel-info">
+            <span class="tmux-panel-name">${esc(name)}</span>
+            <span class="tmux-panel-sub">tmux session — not monitored</span>
+          </div>
+        </div>
+        <div class="tmux-panel-actions">
+          <button class="btn sm primary" onclick="event.stopPropagation(); trackTmuxSession('${escJs(name)}')" title="Start monitoring this session">Track</button>
+          <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in Terminal.app">Terminal</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // --- Service sessions section ---
+  if (serviceSessions.length > 0) {
+    html += `<div class="tmux-section-header tmux-section-service">
+      <span>Service</span>
+      <span class="tmux-section-hint">${serviceSessions.length} internal</span>
+      <label class="tmux-service-toggle" onclick="event.stopPropagation()">
+        <input type="checkbox" id="tmuxShowService" ${showService ? 'checked' : ''} onchange="refreshTmuxPanelContent()">
+        show
+      </label>
+    </div>`;
+    if (showService) {
+      html += serviceSessions.map(name => `
+        <div class="tmux-panel-item tmux-service-item">
+          <div class="tmux-panel-left">
+            <div class="status-dot idle" style="opacity:0.4"></div>
+            <div class="tmux-panel-info">
+              <span class="tmux-panel-name" style="opacity:0.5;font-size:12px">${esc(name)}</span>
+            </div>
+          </div>
+          <div class="tmux-panel-actions">
+            <button class="btn sm" onclick="event.stopPropagation(); attachTmux('${escJs(name)}')" title="Open in Terminal.app">Terminal</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  if (!html) {
+    html = '<div class="empty-msg">No tmux sessions found</div>';
+  }
+
+  list.innerHTML = html;
+}
+
+function closeTmuxPanel() {
+  el('tmuxPanel').classList.remove('visible');
 }
 
 async function attachTmux(tmuxName) {
-  el('tmuxPanel').classList.remove('visible');
+  closeTmuxPanel();
   await API.openTmuxSession('_', tmuxName);
+}
+
+async function focusTmuxSession(name) {
+  closeTmuxPanel();
+  await API.focusSession(name);
+}
+
+async function trackTmuxSession(tmuxName) {
+  const sessionName = prompt(`Track "${tmuxName}" as:\n(CSM display name)`, tmuxName);
+  if (!sessionName) return;
+  const projectPath = prompt('Project path (optional):', '') || null;
+  await API.trackSession(sessionName, tmuxName, projectPath);
+  const d = await API.getSessions();
+  State.sessions = d;
+  renderProjects();
+  refreshTmuxPanelContent();
+}
+
+async function untrackSession(name) {
+  if (!confirm(`Untrack "${name}"?\nThe tmux session will keep running, but CSM will stop monitoring it.`)) return;
+  await API.untrackSession(name);
+  if (State.selected === name) {
+    State.selected = null;
+    State.wishes = [];
+    State.tasks = [];
+  }
+  const d = await API.getSessions();
+  State.sessions = d;
+  renderProjects();
+  renderTerminal();
+  refreshTmuxPanelContent();
 }
 
 function toggleAlerts() {
   // TODO: alerts panel
 }
+
+// ─── Context Menu on Projects ────────────────────
+
+let ctxMenuTarget = null;
+
+function showProjectCtxMenu(e, name) {
+  e.preventDefault();
+  e.stopPropagation();
+  ctxMenuTarget = name;
+
+  const menu = el('projectCtxMenu');
+  menu.style.top = e.clientY + 'px';
+  menu.style.left = e.clientX + 'px';
+  menu.classList.add('visible');
+}
+
+function hideProjectCtxMenu() {
+  el('projectCtxMenu')?.classList.remove('visible');
+  ctxMenuTarget = null;
+}
+
+async function ctxAction(action) {
+  const name = ctxMenuTarget;
+  hideProjectCtxMenu();
+  if (!name) return;
+
+  switch (action) {
+    case 'select':
+      selectProject(name);
+      break;
+    case 'focus':
+      await API.focusSession(name);
+      break;
+    case 'terminal':
+      await API.openTerminal(name);
+      break;
+    case 'perms':
+      selectProject(name);
+      setTimeout(() => showPermsModal(), 100);
+      break;
+    case 'untrack':
+      await untrackSession(name);
+      break;
+    case 'delete':
+      await deleteProject(name);
+      break;
+  }
+}
+
+document.addEventListener('click', () => hideProjectCtxMenu());
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('.project-item')) hideProjectCtxMenu();
+});
 
 // Close tmux panel on outside click
 document.addEventListener('click', (e) => {
@@ -568,7 +844,10 @@ document.addEventListener('click', (e) => {
 async function refreshTmuxCount() {
   try {
     const data = await API.getTmuxSessions();
-    el('tmuxCount').textContent = data.all.length;
+    const service = data.all.filter(n => SERVICE_SESSION_RE.test(n)).length;
+    const count = data.all.length - service;
+    el('tmuxCount').textContent = count;
+    el('tmuxCount').title = `${data.tracked.length} tracked, ${data.untracked.length - service} discovered${service ? ', ' + service + ' service' : ''}`;
   } catch {}
 }
 setInterval(refreshTmuxCount, 5000);

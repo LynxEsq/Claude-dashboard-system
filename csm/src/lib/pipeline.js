@@ -56,7 +56,10 @@ function initTables() {
       execution_log TEXT,
       created_at DATETIME DEFAULT (datetime('now')),
       started_at DATETIME,
-      completed_at DATETIME
+      completed_at DATETIME,
+      updated_at DATETIME,
+      type TEXT DEFAULT 'task',
+      result TEXT
     );
 
     CREATE TABLE IF NOT EXISTS execution_log (
@@ -76,6 +79,20 @@ function initTables() {
     CREATE INDEX IF NOT EXISTS idx_tasks_session
       ON tasks(session_name, status);
   `);
+
+  // Migrations: add columns if missing (existing databases)
+  try {
+    const cols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
+    if (!cols.includes('updated_at')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN updated_at DATETIME");
+    }
+    if (!cols.includes('type')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN type TEXT DEFAULT 'task'");
+    }
+    if (!cols.includes('result')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN result TEXT");
+    }
+  } catch {}
 }
 
 // ─── Wishes (Inbox) ────────────────────────────────────
@@ -137,13 +154,14 @@ function createTask(sessionName, title, description, wishIds = [], priority = 0)
 }
 
 function updateTask(id, fields) {
-  const allowed = ['title', 'description', 'priority', 'status'];
+  const allowed = ['title', 'description', 'priority', 'status', 'type', 'result'];
   const sets = [];
   const values = [];
   for (const [k, v] of Object.entries(fields)) {
     if (allowed.includes(k)) { sets.push(`${k} = ?`); values.push(v); }
   }
   if (sets.length === 0) return;
+  sets.push(`updated_at = datetime('now')`);
   values.push(id);
   getDb().prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 }
@@ -187,12 +205,10 @@ function updateTaskStatus(taskId, status, outputSummary = null) {
   if (status === 'completed' || status === 'failed') updates.completed_at = new Date().toISOString();
   if (outputSummary) updates.execution_log = outputSummary;
 
-  const sets = Object.entries(updates)
-    .map(([k]) => `${k} = ?`)
-    .join(', ');
+  const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ') + `, updated_at = datetime('now')`;
   const values = Object.values(updates);
 
-  getDb().prepare(`UPDATE tasks SET ${sets} WHERE id = ?`).run(...values, taskId);
+  getDb().prepare(`UPDATE tasks SET ${setClause} WHERE id = ?`).run(...values, taskId);
 }
 
 function getNextPendingTask(sessionName) {
@@ -282,7 +298,13 @@ Convert the NEW wishes into actionable tasks. CRITICAL RULES:
 - Return ALL actions needed: creates, updates, and deletes
 
 ## Output Format:
-Return a JSON array. Each item:
+Return a JSON object with this structure:
+{
+  "tasks": [ ... ],   // array of task actions (can be empty)
+  "summary": "..."    // brief explanation of what was planned (always required)
+}
+
+Each item in "tasks" array:
 {
   "action": "create" | "update" | "delete",
   "existing_id": null,          // for "update"/"delete": the [task-ID] number from existing tasks
@@ -292,7 +314,13 @@ Return a JSON array. Each item:
   "priority": 0-10              // higher = more urgent
 }
 
-Return ONLY the JSON array, no markdown, no explanation.`;
+If no new tasks are needed (e.g. wishes are questions, already covered by existing tasks, or just recommendations), return:
+{
+  "tasks": [],
+  "summary": "Clear explanation for the user why no tasks were created and what is recommended"
+}
+
+Return ONLY the JSON object, no markdown, no explanation.`;
 }
 
 /**
@@ -364,6 +392,9 @@ function executeTaskInteractive(sessionName, taskId) {
 
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
+
+  // Verify claude CLI is available
+  findClaudeBin();
 
   const safeName = tmux.safeTmuxName(sessionName);
   const execTmux = `csm-task-${safeName}-${taskId}`;
@@ -439,13 +470,14 @@ function executeTaskSilent(sessionName, taskId) {
 
   fs.writeFileSync(promptFile, task.description);
 
+  // Verify claude CLI is available before creating sessions
+  const claudeBin = findClaudeBin();
+
   tmux.killSession(execTmux);
   const result = tmux.createSession(execTmux, cwd, false);
   if (!result.success) {
     return { started: false, reason: 'Cannot create exec session: ' + result.error };
   }
-
-  const claudeBin = execSync('which claude', { encoding: 'utf-8' }).trim();
   fs.writeFileSync(scriptFile, [
     '#!/bin/bash',
     `echo "=== Executing task: ${task.title.replace(/"/g, '\\"')} ==="`,
@@ -458,7 +490,15 @@ function executeTaskSilent(sessionName, taskId) {
   ].join('\n'));
   fs.chmodSync(scriptFile, '755');
 
-  execSync(`tmux send-keys -t "${execTmux}" 'bash ${scriptFile}' Enter`, { timeout: 5000 });
+  try {
+    execSync(`tmux send-keys -t "${execTmux}" 'bash ${scriptFile}' Enter`, { timeout: 5000 });
+  } catch (err) {
+    tmux.killSession(execTmux);
+    throw new PipelineError(
+      'Не удалось запустить задачу в tmux сессии: ' + err.message,
+      'TMUX_SEND_FAILED'
+    );
+  }
 
   updateTaskStatus(taskId, 'running');
   const execId = logExecution(taskId, sessionName, execTmux);
@@ -537,6 +577,33 @@ function getTaskExecStatus(sessionName, taskId) {
 const activePlans = new Map();
 
 /**
+ * Find the claude CLI binary path. Throws a user-friendly error if not found.
+ */
+function findClaudeBin() {
+  const { execSync } = require('child_process');
+  try {
+    return execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
+  } catch {
+    throw new PipelineError(
+      'Claude CLI не найден. Убедитесь, что claude установлен и доступен в PATH.\n' +
+      'Установка: npm install -g @anthropic-ai/claude-code',
+      'CLAUDE_NOT_FOUND'
+    );
+  }
+}
+
+/**
+ * Custom error class for pipeline errors with error codes.
+ */
+class PipelineError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = 'PipelineError';
+    this.code = code;
+  }
+}
+
+/**
  * Start planning: launch Claude in a visible tmux session.
  * User can attach to watch. Poll /plan/status for results.
  */
@@ -566,6 +633,9 @@ function planTasks(sessionName) {
     cwd = projectPath;
   }
 
+  // Verify claude CLI is available before creating sessions
+  const claudeBin = findClaudeBin();
+
   const safeName = tmux.safeTmuxName(sessionName);
   const planTmux = `csm-plan-${safeName}`;
   const ts = Date.now();
@@ -586,7 +656,6 @@ function planTasks(sessionName) {
 
   // Write a shell script: claude --print (non-interactive, no questions)
   // tee shows output in terminal so user can watch, result saved to file
-  const claudeBin = execSync('which claude', { encoding: 'utf-8' }).trim();
   const scriptFile = path.join(os.tmpdir(), `csm-plan-run-${safeName}-${ts}.sh`);
   fs.writeFileSync(scriptFile, [
     '#!/bin/bash',
@@ -601,7 +670,27 @@ function planTasks(sessionName) {
   fs.chmodSync(scriptFile, '755');
 
   // Run script in tmux session
-  execSync(`tmux send-keys -t "${planTmux}" 'bash ${scriptFile}' Enter`, { timeout: 5000 });
+  try {
+    execSync(`tmux send-keys -t "${planTmux}" 'bash ${scriptFile}' Enter`, { timeout: 5000 });
+  } catch (err) {
+    tmux.killSession(planTmux);
+    throw new PipelineError(
+      'Не удалось запустить планирование в tmux сессии: ' + err.message,
+      'TMUX_SEND_FAILED'
+    );
+  }
+
+  // Create a plan-type task to track planning progress
+  const wishSummary = wishes.map(w => w.content.substring(0, 80)).join('; ');
+  const planTaskId = createTask(
+    sessionName,
+    `Planning: ${wishes.length} wish${wishes.length !== 1 ? 'es' : ''}`,
+    `Analyzing wishes: ${wishSummary}`,
+    wishes.map(w => w.id),
+    0
+  );
+  // Set type to 'plan' and status to 'running'
+  updateTask(planTaskId, { type: 'plan', status: 'running' });
 
   // Track
   activePlans.set(sessionName, {
@@ -610,6 +699,7 @@ function planTasks(sessionName) {
     outputFile,
     scriptFile,
     wishIds: wishes.map(w => w.id),
+    planTaskId,
     startedAt: Date.now(),
   });
 
@@ -618,6 +708,7 @@ function planTasks(sessionName) {
     status: 'running',
     tmuxSession: planTmux,
     wishCount: wishes.length,
+    planTaskId,
   };
 }
 
@@ -665,6 +756,13 @@ function getPlanStatus(sessionName) {
 
   if (!tasksJson) {
     // Don't kill session so user can inspect
+    // Update plan-task as failed
+    if (plan.planTaskId) {
+      updateTask(plan.planTaskId, {
+        status: 'failed',
+        result: 'Claude did not return valid JSON. Raw: ' + cleanOutput.substring(cleanOutput.length - 500),
+      });
+    }
     activePlans.delete(sessionName);
     return { status: 'error', reason: 'Claude did not return valid JSON', raw: cleanOutput.substring(cleanOutput.length - 500) };
   }
@@ -672,7 +770,7 @@ function getPlanStatus(sessionName) {
   tmux.killSession(plan.tmuxSession);
   activePlans.delete(sessionName);
 
-  const result = applyPlan(sessionName, tasksJson, plan.wishIds);
+  const result = applyPlan(sessionName, tasksJson, plan.wishIds, plan.planTaskId);
   return {
     status: 'done',
     ...result,
@@ -686,12 +784,28 @@ function getPlanStatus(sessionName) {
 function extractJson(text) {
   if (!text) return null;
 
+  // Helper: accept both { tasks: [...], summary } object and plain [...] array
+  function isValidPlanJson(parsed) {
+    if (Array.isArray(parsed)) return true;
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) return true;
+    return false;
+  }
+
   // Try to find JSON in code block
   const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   if (codeBlockMatch) {
     try {
       const parsed = JSON.parse(codeBlockMatch[1].trim());
-      if (Array.isArray(parsed)) return codeBlockMatch[1].trim();
+      if (isValidPlanJson(parsed)) return codeBlockMatch[1].trim();
+    } catch {}
+  }
+
+  // Try to find a JSON object with "tasks" key
+  const objectMatch = text.match(/\{[\s\S]*"tasks"[\s\S]*\}/);
+  if (objectMatch) {
+    try {
+      const parsed = JSON.parse(objectMatch[0]);
+      if (isValidPlanJson(parsed)) return objectMatch[0];
     } catch {}
   }
 
@@ -707,7 +821,7 @@ function extractJson(text) {
   // Try the whole text
   try {
     const parsed = JSON.parse(text.trim());
-    if (Array.isArray(parsed)) return text.trim();
+    if (isValidPlanJson(parsed)) return text.trim();
   } catch {}
 
   return null;
@@ -716,13 +830,30 @@ function extractJson(text) {
 /**
  * Apply planned tasks (after AI returns the JSON).
  */
-function applyPlan(sessionName, tasksJson, wishIds) {
-  let items;
+function applyPlan(sessionName, tasksJson, wishIds, planTaskId = null) {
+  let parsed;
   try {
-    items = JSON.parse(tasksJson);
-    if (!Array.isArray(items)) throw new Error('Not an array');
+    parsed = JSON.parse(tasksJson);
   } catch (e) {
+    if (planTaskId) {
+      updateTask(planTaskId, { status: 'failed', result: 'Invalid JSON: ' + e.message });
+    }
     return { success: false, error: 'Invalid JSON: ' + e.message };
+  }
+
+  // Support both new { tasks, summary } format and old plain array format
+  let items, summary;
+  if (Array.isArray(parsed)) {
+    items = parsed;
+    summary = null;
+  } else if (parsed && Array.isArray(parsed.tasks)) {
+    items = parsed.tasks;
+    summary = parsed.summary || null;
+  } else {
+    if (planTaskId) {
+      updateTask(planTaskId, { status: 'failed', result: 'Unexpected JSON structure' });
+    }
+    return { success: false, error: 'Unexpected JSON structure' };
   }
 
   const createdTaskIds = [];
@@ -760,7 +891,21 @@ function applyPlan(sessionName, tasksJson, wishIds) {
     markWishesProcessed(wishIds, createdTaskIds);
   }
 
-  return { success: true, taskIds: createdTaskIds, count: created, updated, deleted };
+  // Update plan-task with result
+  if (planTaskId) {
+    let resultText;
+    if (items.length === 0) {
+      resultText = summary || 'No tasks created';
+    } else {
+      resultText = `Created ${created} task(s)` +
+        (updated ? `, updated ${updated}` : '') +
+        (deleted ? `, deleted ${deleted}` : '') +
+        (summary ? `. ${summary}` : '');
+    }
+    updateTask(planTaskId, { status: 'completed', result: resultText });
+  }
+
+  return { success: true, taskIds: createdTaskIds, count: created, updated, deleted, summary };
 }
 
 /**
@@ -788,6 +933,7 @@ function close() {
 }
 
 module.exports = {
+  PipelineError,
   addWish,
   updateWish,
   deleteWish,

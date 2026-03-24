@@ -82,7 +82,16 @@ class SessionMonitor extends EventEmitter {
   pollSession(name, session) {
     // Check if tmux session exists
     if (!tmux.sessionExists(session.tmuxSession)) {
-      this.updateStatus(name, detector.Status.OFFLINE, 'tmux session not found');
+      const prevStatus = session.status;
+      session.status = detector.Status.OFFLINE;
+      session.detail = 'tmux session not found';
+      session.lastOutput = '';
+      session.lastUpdate = new Date();
+      if (prevStatus !== session.status) {
+        session.statusSince = new Date();
+        this.emit('statusChange', { name, from: prevStatus, to: session.status, detail: session.detail });
+      }
+      this.emit('update', { name, session: { ...session } });
       return;
     }
 
@@ -93,8 +102,16 @@ class SessionMonitor extends EventEmitter {
       session.tmuxPane
     );
 
-    if (!paneOutput) {
-      this.updateStatus(name, detector.Status.OFFLINE, 'Cannot read pane');
+    if (paneOutput === null) {
+      const prevStatus = session.status;
+      session.status = detector.Status.OFFLINE;
+      session.detail = 'Cannot read pane';
+      session.lastUpdate = new Date();
+      if (prevStatus !== session.status) {
+        session.statusSince = new Date();
+        this.emit('statusChange', { name, from: prevStatus, to: session.status, detail: session.detail });
+      }
+      this.emit('update', { name, session: { ...session } });
       return;
     }
 

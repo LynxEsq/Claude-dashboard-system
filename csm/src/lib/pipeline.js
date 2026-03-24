@@ -914,6 +914,7 @@ function getPlanStatus(sessionName) {
   }
 
   tmux.killSession(plan.tmuxSession);
+  if (plan.planTaskId) endSessionMapping(plan.planTaskId);
   activePlans.delete(sessionName);
 
   const result = applyPlan(sessionName, tasksJson, plan.wishIds, plan.planTaskId);
@@ -1065,6 +1066,7 @@ function cleanSession(sessionName) {
     const placeholders = taskIds.map(() => '?').join(',');
     d.prepare(`DELETE FROM execution_log WHERE task_id IN (${placeholders})`).run(...taskIds);
   }
+  d.prepare('DELETE FROM session_mappings WHERE session_name = ?').run(sessionName);
   d.prepare('DELETE FROM tasks WHERE session_name = ?').run(sessionName);
   d.prepare('DELETE FROM wishes WHERE session_name = ?').run(sessionName);
 

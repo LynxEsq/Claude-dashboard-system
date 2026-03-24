@@ -1126,5 +1126,10 @@ module.exports = {
   executeTaskSilent,
   getTaskExecStatus,
   applyPlan,
+  saveSessionMapping,
+  getSessionMapping,
+  getActiveSessionMappings,
+  endSessionMapping,
+  restoreSessionMappings,
   close,
 };

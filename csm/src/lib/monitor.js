@@ -3,6 +3,7 @@ const config = require('./config');
 const tmux = require('./tmux');
 const detector = require('./detector');
 const history = require('./history');
+const { cleanAnsi } = require('./utils');
 
 class SessionMonitor extends EventEmitter {
   constructor() {
@@ -115,13 +116,16 @@ class SessionMonitor extends EventEmitter {
       return;
     }
 
+    // Strip ANSI for status detection (patterns expect clean text)
+    const cleanOutput = cleanAnsi(paneOutput);
+
     // Detect status
-    const { status, detail } = detector.detectStatus(paneOutput);
+    const { status, detail } = detector.detectStatus(cleanOutput);
 
     // Extract tokens
-    const tokens = detector.extractTokenUsage(paneOutput);
+    const tokens = detector.extractTokenUsage(cleanOutput);
 
-    // Extract last output for preview
+    // Extract last output for preview (keep ANSI for colored rendering)
     const lastOutput = detector.extractLastOutput(paneOutput, 200);
 
     // Update state

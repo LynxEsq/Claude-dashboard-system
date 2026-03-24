@@ -102,15 +102,15 @@ async function fetchTaskTerminal(taskId) {
     if (State.selectedTask !== taskId) return;
 
     if (status.preview) {
-      el('termBody').textContent = status.preview;
+      setTermContent(status.preview, true);
     } else if (status.lastOutput) {
-      el('termBody').textContent = status.lastOutput;
+      setTermContent(status.lastOutput, false);
     }
     // If tmux session ended, show that info
     if (status.tmuxSession && status.tmuxAlive === false) {
       const existing = el('termBody').textContent;
       if (!existing || existing === '(no output)') {
-        el('termBody').textContent = `Session ended: ${status.tmuxSession}\n\n${status.lastOutput || 'No output saved.'}`;
+        setTermContent(`Session ended: ${status.tmuxSession}\n\n${status.lastOutput || 'No output saved.'}`, false);
       }
     }
   } catch {}
@@ -128,7 +128,7 @@ async function pollTaskOutput(taskId) {
 
     // Only update content and scroll when live mode is on
     if (State.liveMode && status.preview) {
-      el('termBody').textContent = status.preview;
+      setTermContent(status.preview, true);
       const body = el('termBody');
       body.scrollTop = body.scrollHeight;
     }

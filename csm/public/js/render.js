@@ -4,6 +4,12 @@
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ANSI → HTML converter for terminal output
+const _ansiUp = new AnsiUp();
+_ansiUp.escape_html = true; // XSS protection (default, but explicit)
+/** Convert text with ANSI escape codes to safe HTML */
+function ansiHtml(s) { return _ansiUp.ansi_to_html(s || ''); }
 /** Render markdown safely: escape HTML first (XSS prevention), then parse markdown */
 function md(s) { return typeof marked !== 'undefined' ? marked.parse(esc(s || '')) : esc(s || ''); }
 // Escape a string for safe use inside JS string literals in HTML attributes
@@ -486,9 +492,19 @@ function renderTasks() {
 
 // ─── Column 4: Terminal ──────────────────────────
 
+/** Set terminal body content: use innerHTML with ANSI rendering for live output, textContent for static messages */
+function setTermContent(text, isAnsi) {
+  const body = el('termBody');
+  if (isAnsi) {
+    body.innerHTML = ansiHtml(text);
+  } else {
+    body.textContent = text;
+  }
+}
+
 function renderTerminal() {
   if (!State.selected || !State.sessions[State.selected]) {
-    el('termBody').textContent = 'Select a project to see output...';
+    setTermContent('Select a project to see output...', false);
     el('termTitle').textContent = 'Terminal';
     el('termDot').className = 'status-dot';
     return;
@@ -508,12 +524,12 @@ function renderTerminal() {
       if (t.status !== 'running' && State.liveMode) {
         if (isPlan) {
           const content = t.result || t.description || '(no planning output)';
-          el('termBody').textContent = content;
+          setTermContent(content, false);
         } else if (t.tmux_status === 'ended' || (t.tmux_session_name && t.tmux_status !== 'active')) {
-          el('termBody').textContent = t.execution_log || t.result || `Session ended: ${t.tmux_session_name || 'unknown'}\n\n${t.description || '(no output saved)'}`;
+          setTermContent(t.execution_log || t.result || `Session ended: ${t.tmux_session_name || 'unknown'}\n\n${t.description || '(no output saved)'}`, false);
         } else {
           const content = t.execution_log || t.result || t.description || '(no output)';
-          el('termBody').textContent = content;
+          setTermContent(content, false);
         }
       }
     }
@@ -527,13 +543,13 @@ function renderTerminal() {
   el('termDot').className = `status-dot ${s.status}`;
 
   if (s.lastOutput) {
-    el('termBody').textContent = s.lastOutput;
+    setTermContent(s.lastOutput, true);
   } else if (s.status === 'offline') {
-    el('termBody').textContent = `Session offline: ${s.detail || 'tmux pane not available'}.\nCheck that the tmux session exists and the pane target is correct.`;
+    setTermContent(`Session offline: ${s.detail || 'tmux pane not available'}.\nCheck that the tmux session exists and the pane target is correct.`, false);
   } else if (s.status === 'working') {
-    el('termBody').textContent = `Claude is working... (${s.detail || 'processing'})\nWaiting for terminal output to appear.`;
+    setTermContent(`Claude is working... (${s.detail || 'processing'})\nWaiting for terminal output to appear.`, false);
   } else {
-    el('termBody').textContent = '(no output yet)';
+    setTermContent('(no output yet)', false);
   }
 
   const body = el('termBody');

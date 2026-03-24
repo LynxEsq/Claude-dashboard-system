@@ -870,8 +870,8 @@ function getTaskExecStatus(sessionName, taskId) {
     const paneOutput = tmux.capturePane(exec.tmuxSession, null, null) || '';
 
     // Check if Claude returned to prompt (task likely finished)
-    // Look for prompt chars on the last 3 lines
-    const lastLines = paneOutput.split('\n').slice(-3).join('\n');
+    // Look for prompt chars on the last 3 lines (strip ANSI for reliable regex matching)
+    const lastLines = cleanAnsi(paneOutput.split('\n').slice(-3).join('\n'));
     const promptVisible = /❯/.test(lastLines) || /\$\s*$/.test(lastLines);
 
     // If prompt is visible and enough time has passed (>30s), mark as completed

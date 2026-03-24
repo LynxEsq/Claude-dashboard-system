@@ -9,7 +9,7 @@ function capturePane(tmuxSession, tmuxWindow, tmuxPane, lines = 500) {
   try {
     // Capture full scrollback + visible screen
     const output = execSync(
-      `tmux capture-pane -t "${target}" -p -S - -E -`,
+      `tmux capture-pane -e -t "${target}" -p -S - -E -`,
       { encoding: 'utf-8', timeout: 5000 }
     );
     // Strip trailing empty/whitespace-only lines

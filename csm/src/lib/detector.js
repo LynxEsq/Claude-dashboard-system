@@ -16,21 +16,26 @@ const Status = {
  * These match the typical Claude Code CLI indicators.
  */
 const PATTERNS = {
-  // Claude is actively processing — spinner, "Thinking", tool use indicators
+  // Prompt indicators — checked on last 5 lines FIRST to override stale working matches.
+  // Must use same window size as working patterns to avoid working overriding prompt.
+  prompt: [
+    /❯/,                               // Claude Code prompt char
+    /^\s*>\s*$/m,                      // bare prompt
+    /\$\s*$/m,                         // shell prompt at end
+    /%\s*$/m,                          // zsh prompt
+    /^\s*#\s*$/m,                      // root prompt
+  ],
+  // Claude is actively processing — spinner, "Thinking", tool use indicators.
+  // Only real-time activity indicators; avoid matching stale task descriptions.
+  // Patterns require line-start context to avoid matching inside prose/log text.
   working: [
     /⏳/,
     /\bthinking\b/i,
-    /\bworking\b/i,
-    /\bRunning\b/,
-    /\bSearching\b/,
-    /\bReading\b/,
-    /\bWriting\b/,
-    /\bEditing\b/,
-    /\bExecuting\b/,
-    /\bAnalyzing\b/,
-    /✻/,
+    /✻(?!\s*(Cogitated|Baked|Completed|Finished|Done|Took|for\s+\d))/,  // active spinner, not completion summary
     /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/, // spinner chars
     /Claude is working/i,
+    /^\s*⎿?\s*(Searching|Reading|Writing|Editing|Executing|Analyzing)\b/m, // tool-use lines (indented or with ⎿ prefix)
+    /^\s*⎿?\s*Running\s+(command|bash|tool|test|npm|node|script)/im,       // Running a tool/command, not "Running task..."
   ],
   // Claude needs user input — prompt, question mark, waiting for answer
   needsInput: [
@@ -46,6 +51,11 @@ const PATTERNS = {
     /\bReady for input\b/i,
     /❯/,                               // prompt char
     /\$\s*$/m,                         // shell prompt at end
+    /%\s*$/m,                          // zsh prompt
+    /^\s*#\s*$/m,                      // root prompt
+    /\bAllow\b.*\?/,                   // Claude Code permission prompt ("Allow Read?")
+    /\bDo you want to proceed\b/i,
+    /\(yes\/no\)/i,
   ],
   // Error indicators
   error: [
@@ -62,17 +72,31 @@ const PATTERNS = {
 
 /**
  * Analyze captured pane output and determine session status.
- * Focuses on the last ~15 lines for the most recent state.
+ *
+ * Priority: prompt on last lines > errors > working (narrow window) > input > idle
+ *
+ * Key insight: if the very last lines show a prompt (❯, $, >), Claude is done
+ * and waiting for input — regardless of working keywords in earlier output.
  */
 function detectStatus(paneOutput) {
   if (!paneOutput) return { status: Status.OFFLINE, detail: 'No pane output' };
 
   const lines = paneOutput.split('\n');
   const recentLines = lines.slice(-20).join('\n');
-  // Use last 15 lines for working/input detection — Claude TUI has separators/empty lines after prompt
-  const lastFewLines = lines.slice(-15).join('\n');
+  // Last 5 lines — used for both prompt and working detection (same window = fair priority)
+  const narrowWindow = lines.slice(-5).join('\n');
+  // Last 2 lines — the very bottom of the terminal for definitive prompt detection
+  const bottomLines = lines.slice(-2).join('\n');
 
-  // Check for errors first (in recent 20 lines)
+  // FIRST: check last 5 lines for prompt — if prompt is visible, Claude is done.
+  // Use same window as working to ensure prompt always wins over stale working indicators.
+  for (const pattern of PATTERNS.prompt) {
+    if (pattern.test(narrowWindow)) {
+      return { status: Status.NEEDS_INPUT, detail: 'Awaiting user input' };
+    }
+  }
+
+  // Check for errors (in recent 20 lines)
   for (const pattern of PATTERNS.error) {
     if (pattern.test(recentLines)) {
       const match = recentLines.match(pattern);
@@ -80,17 +104,17 @@ function detectStatus(paneOutput) {
     }
   }
 
-  // Check if actively working (spinner, tool use)
+  // Check if actively working — only in last 5 lines to avoid stale tool-use output
   for (const pattern of PATTERNS.working) {
-    if (pattern.test(lastFewLines)) {
-      const match = lastFewLines.match(pattern);
+    if (pattern.test(narrowWindow)) {
+      const match = narrowWindow.match(pattern);
       return { status: Status.WORKING, detail: match ? match[0].trim() : 'Working' };
     }
   }
 
-  // Check if waiting for input
+  // Check if waiting for input (broader scan)
   for (const pattern of PATTERNS.needsInput) {
-    if (pattern.test(lastFewLines)) {
+    if (pattern.test(narrowWindow)) {
       return { status: Status.NEEDS_INPUT, detail: 'Awaiting user input' };
     }
   }

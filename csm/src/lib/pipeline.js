@@ -838,6 +838,9 @@ function planTasks(sessionName) {
   // Set type to 'plan' and status to 'running'
   updateTask(planTaskId, { type: 'plan', status: 'running' });
 
+  // Save persistent mapping for the plan task
+  saveSessionMapping(planTaskId, planTmux, sessionName);
+
   // Track
   activePlans.set(sessionName, {
     tmuxSession: planTmux,
@@ -904,6 +907,7 @@ function getPlanStatus(sessionName) {
         status: 'failed',
         result: 'Claude did not return valid JSON. Raw: ' + cleanOutput.substring(cleanOutput.length - 500),
       });
+      endSessionMapping(plan.planTaskId);
     }
     activePlans.delete(sessionName);
     return { status: 'error', reason: 'Claude did not return valid JSON', raw: cleanOutput.substring(cleanOutput.length - 500) };

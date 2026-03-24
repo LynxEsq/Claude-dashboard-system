@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSM — Claude Session Manager</title>
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/components.css">
+</head>
+<body>
+
+<header>
+  <h1>⚡ CSM</h1>
+  <div class="header-right">
+    <span class="tmux-count" id="tmuxCount" onclick="toggleTmuxPanel()" title="tmux sessions">0</span>
+    <span class="alert-count" id="alertCount" onclick="toggleAlerts()" title="Alerts">0</span>
+    <div class="conn-dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- tmux sessions popup -->
+<div class="tmux-panel" id="tmuxPanel">
+  <div class="tmux-panel-header">tmux sessions</div>
+  <div id="tmuxPanelList"></div>
+</div>
+
+<div class="columns">
+
+  <!-- Column 1: Projects -->
+  <div class="col">
+    <div class="col-header">
+      Projects
+      <button class="btn sm primary" onclick="showModal('create')">+</button>
+    </div>
+    <div class="col-body" id="projectList">
+      <div class="empty-msg">No projects yet</div>
+    </div>
+  </div>
+
+  <!-- Column 2: Wishes (Inbox) -->
+  <div class="col">
+    <div class="col-header">
+      Inbox <span id="wishCount" style="color:var(--blue)"></span>
+    </div>
+    <div class="wish-input-area">
+      <textarea id="wishText" placeholder="What do you want to do?&#10;Ctrl+Enter to add" rows="3"></textarea>
+      <div class="wish-actions">
+        <span style="font-size:10px;color:var(--text2)" id="wishHint">Select a project first</span>
+        <button class="btn primary" onclick="addWish()" id="addWishBtn" disabled>Add</button>
+      </div>
+    </div>
+    <div class="col-body" id="wishList">
+      <div class="empty-msg">Select a project</div>
+    </div>
+  </div>
+
+  <!-- Column 3: Tasks -->
+  <div class="col">
+    <div class="col-header">
+      Tasks <span id="taskCount" style="color:var(--blue)"></span>
+    </div>
+    <div class="task-actions-bar">
+      <button class="btn green" onclick="planFromWishes()" id="planBtn" disabled title="AI converts wishes into tasks">Plan</button>
+      <button class="btn primary" onclick="executeNext()" id="execBtn" disabled title="Run next pending task">Run Next</button>
+      <button class="btn sm" onclick="showModal('task')" id="addTaskBtn" disabled>+ Manual</button>
+    </div>
+    <div class="col-body" id="taskList">
+      <div class="empty-msg">Select a project</div>
+    </div>
+  </div>
+
+  <!-- Column 4: Terminal -->
+  <div class="col" style="border-right:none">
+    <div class="terminal-header">
+      <div class="terminal-title">
+        <div class="status-dot" id="termDot"></div>
+        <span id="termTitle">Terminal</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <label class="ios-toggle" title="Auto-refresh terminal output">
+          <input type="checkbox" id="termLive" checked onchange="toggleLive()">
+          <span class="ios-slider"></span>
+          <span class="ios-label">Live</span>
+        </label>
+        <button class="btn sm green" onclick="openTerminal()" title="Open in Terminal.app">Terminal</button>
+        <button class="btn sm" onclick="showPermsModal()" title="Manage permissions">Perms</button>
+        <button class="btn sm" onclick="focusSelected()">Focus</button>
+        <button class="btn sm" onclick="restartSelected()">Restart</button>
+      </div>
+    </div>
+    <div class="terminal-body" id="termBody">Select a project or task to see output...</div>
+    <div class="terminal-keys">
+      <button class="btn sm" onclick="sendRawKeys('Enter')" title="Enter">Enter</button>
+      <button class="btn sm" onclick="sendRawKeys('y Enter')" title="y + Enter">y</button>
+      <button class="btn sm" onclick="sendRawKeys('n Enter')" title="n + Enter">n</button>
+      <button class="btn sm" onclick="sendRawKeys('C-c')" title="Ctrl+C">Ctrl+C</button>
+      <button class="btn sm" onclick="sendRawKeys('Up')" title="Arrow Up">Up</button>
+      <button class="btn sm" onclick="sendRawKeys('Down')" title="Arrow Down">Down</button>
+      <button class="btn sm" onclick="sendRawKeys('C-d')" title="Ctrl+D (EOF)">Ctrl+D</button>
+      <button class="btn sm" onclick="sendRawKeys('Escape')" title="Escape">Esc</button>
+    </div>
+    <div class="terminal-input">
+      <input type="text" id="termInput" placeholder="Type and press Enter to send to Claude..." onkeydown="handleTermKey(event)">
+      <button class="btn primary" onclick="sendInput()">Send</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Create Project Modal -->
+<div class="modal-overlay" id="modal-create">
+  <div class="modal">
+    <h2>New Claude Session</h2>
+    <div class="fg">
+      <label>Session Name</label>
+      <input type="text" id="c-name" placeholder="my-project">
+    </div>
+    <div class="fg">
+      <label>Project Path (optional)</label>
+      <input type="text" id="c-path" placeholder="/path/to/project">
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      <input type="checkbox" id="c-claude" checked style="width:auto">
+      <label for="c-claude" style="margin:0;font-size:12px;cursor:pointer">Auto-start <code style="background:var(--bg3);padding:1px 3px;border-radius:3px;font-size:11px">claude</code></label>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="hideModal('create')">Cancel</button>
+      <button class="btn primary" onclick="createProject()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual Task Modal -->
+<div class="modal-overlay" id="modal-task">
+  <div class="modal">
+    <h2>Add Task</h2>
+    <div class="fg">
+      <label>Title</label>
+      <input type="text" id="t-title" placeholder="What to do">
+    </div>
+    <div class="fg">
+      <label>Description (prompt for Claude)</label>
+      <textarea id="t-desc" placeholder="Detailed instructions..."></textarea>
+    </div>
+    <div class="fg">
+      <label>Priority (0-10)</label>
+      <input type="number" id="t-priority" value="5" min="0" max="10">
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="hideModal('task')">Cancel</button>
+      <button class="btn primary" onclick="addManualTask()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Permissions Modal -->
+<div class="modal-overlay" id="modal-perms">
+  <div class="modal" style="width:520px">
+    <h2>Permissions: <span id="perms-project"></span></h2>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Quick presets:</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px" id="permsPresets"></div>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Active permissions:</div>
+    <div id="permsList" style="max-height:300px;overflow-y:auto;margin-bottom:10px"></div>
+    <div class="fg">
+      <label>Add custom permission</label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="perms-custom" placeholder='e.g. Bash(npm:*) or Read' style="flex:1">
+        <button class="btn primary" onclick="addCustomPerm()">Add</button>
+      </div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="hideModal('perms')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- JS Modules -->
+<script src="/js/state.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/actions.js"></script>
+<script src="/js/websocket.js"></script>
+<script>
+  // ─── Init ──────────────────────────────────────
+  connectWS();
+  API.getSessions().then(d => { State.sessions = d; renderProjects(); });
+  API.getAlerts().then(d => { State.alerts = d; renderAlerts(); });
+
+  // Modal close on backdrop / Esc
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('visible'); });
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.visible').forEach(m => m.classList.remove('visible'));
+  });
+
+  // Ctrl+Enter in wish textarea
+  el('wishText')?.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') addWish();
+  });
+</script>
+
+</body>
+</html>

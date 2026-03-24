@@ -49,16 +49,33 @@ function connectWS() {
 
       case 'planStarted':
         State.planningProjects.add(msg.data.sessionName);
+        // Track which wishes are being planned
+        if (msg.data.wishIds && msg.data.sessionName === State.selected) {
+          State.planningWishIds = new Set(msg.data.wishIds);
+          renderWishes();
+        }
         renderProjects();
         break;
 
       case 'planFinished':
         State.planningProjects.delete(msg.data.sessionName);
+        // Clear planning wish tracking
+        if (msg.data.sessionName === State.selected) {
+          State.planningWishIds = new Set();
+          loadWishes();
+          loadTasks();
+        }
         renderProjects();
         break;
 
       case 'taskCreated':
       case 'taskStarted':
+        if (msg.type === 'taskStarted' && msg.data.taskId && msg.data.mode) {
+          State.taskModes[msg.data.taskId] = msg.data.mode;
+        }
+        if (msg.data.dependencies) {
+          parseDependencies(msg.data.dependencies);
+        }
         if (msg.data.sessionName === State.selected) {
           loadTasks();
         } else {
@@ -68,7 +85,37 @@ function connectWS() {
 
       case 'planApplied':
         State.planningProjects.delete(msg.data.sessionName);
+        if (msg.data.dependencies) {
+          parseDependencies(msg.data.dependencies);
+        }
         if (msg.data.sessionName === State.selected) {
+          loadTasks();
+        } else {
+          reloadTaskCountsFor(msg.data.sessionName);
+        }
+        break;
+
+      case 'taskMerged':
+        if (msg.data.sessionName === State.selected) {
+          // Clear cached diff for this task
+          delete State.taskDiffs[msg.data.taskId];
+          loadTasks();
+          showToast(`Task #${msg.data.taskId} merged successfully`, 'success');
+        } else {
+          reloadTaskCountsFor(msg.data.sessionName);
+        }
+        break;
+
+      case 'taskMergeConflict':
+        if (msg.data.sessionName === State.selected) {
+          loadTasks();
+          showToast('Merge conflict — resolve or abort', 'warning');
+        }
+        break;
+
+      case 'taskMergeAborted':
+        if (msg.data.sessionName === State.selected) {
+          delete State.taskDiffs[msg.data.taskId];
           loadTasks();
         } else {
           reloadTaskCountsFor(msg.data.sessionName);
@@ -76,4 +123,19 @@ function connectWS() {
         break;
     }
   };
+}
+
+/**
+ * Parse dependency data from WS messages and store in State.
+ * @param {Object} deps - { taskId: [{blockerTaskId, blockerTitle, blockerStatus, reason}] }
+ */
+function parseDependencies(deps) {
+  if (!deps || typeof deps !== 'object') return;
+  for (const [taskId, blockers] of Object.entries(deps)) {
+    if (Array.isArray(blockers) && blockers.length > 0) {
+      State.taskDependencies[taskId] = blockers;
+    } else {
+      delete State.taskDependencies[taskId];
+    }
+  }
 }

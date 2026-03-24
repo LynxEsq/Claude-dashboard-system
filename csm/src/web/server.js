@@ -258,6 +258,14 @@ function start(port = 9847, autoOpen = true) {
 
   const pipeline = require('../lib/pipeline');
 
+  // Restore persistent session mappings (task↔tmux) from DB on startup
+  try {
+    pipeline.restoreSessionMappings();
+    console.log('[Pipeline] Restored session mappings from DB');
+  } catch (err) {
+    console.error('[Pipeline] Failed to restore session mappings:', err.message);
+  }
+
   app.get('/api/pipeline/:name/wishes', safe((req, res) => {
     res.json(pipeline.getAllWishes(req.params.name));
   }));
@@ -287,10 +295,15 @@ function start(port = 9847, autoOpen = true) {
   }));
 
   app.post('/api/pipeline/:name/tasks', safe((req, res) => {
-    const { title, description, wishIds, priority } = req.body;
+    const { title, description, wishIds, priority, blocked_by } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required' });
     const id = pipeline.createTask(req.params.name, title, description || '', wishIds || [], priority || 0);
-    broadcast(wss, { type: 'taskCreated', data: { sessionName: req.params.name, id, title } });
+    // Save dependencies if provided
+    if (blocked_by && Array.isArray(blocked_by) && blocked_by.length > 0) {
+      pipeline.saveTaskDependencies(id, blocked_by);
+    }
+    const blockers = pipeline.getBlockersForTask(id);
+    broadcast(wss, { type: 'taskCreated', data: { sessionName: req.params.name, id, title, blocked_by: blockers } });
     res.json({ success: true, id });
   }));
 
@@ -310,10 +323,28 @@ function start(port = 9847, autoOpen = true) {
     res.json({ success: true });
   }));
 
+  // Task dependencies API
+  app.get('/api/pipeline/tasks/:id/dependencies', safe((req, res) => {
+    const taskId = parseInt(req.params.id);
+    res.json({
+      blocked_by: pipeline.getBlockersForTask(taskId),
+      blocks: pipeline.getDependentsOfTask(taskId),
+    });
+  }));
+
+  app.post('/api/pipeline/tasks/:id/dependencies', safe((req, res) => {
+    const taskId = parseInt(req.params.id);
+    const { blocked_by } = req.body;
+    if (!Array.isArray(blocked_by)) return res.status(400).json({ error: 'blocked_by must be an array' });
+    pipeline.removeTaskDependencies(taskId);
+    pipeline.saveTaskDependencies(taskId, blocked_by);
+    res.json({ success: true });
+  }));
+
   app.post('/api/pipeline/:name/plan', safe((req, res) => {
     const result = pipeline.planTasks(req.params.name);
     if (result.planned) {
-      broadcast(wss, { type: 'planStarted', data: { sessionName: req.params.name, tmuxSession: result.tmuxSession } });
+      broadcast(wss, { type: 'planStarted', data: { sessionName: req.params.name, tmuxSession: result.tmuxSession, wishIds: result.wishIds } });
     }
     res.json(result);
   }));
@@ -321,7 +352,7 @@ function start(port = 9847, autoOpen = true) {
   app.get('/api/pipeline/:name/plan/status', safe((req, res) => {
     const result = pipeline.getPlanStatus(req.params.name);
     if (result.status === 'done' || result.status === 'error') {
-      broadcast(wss, { type: 'planFinished', data: { sessionName: req.params.name, status: result.status } });
+      broadcast(wss, { type: 'planFinished', data: { sessionName: req.params.name, status: result.status, wishIds: result.wishIds } });
     }
     res.json(result);
   }));
@@ -330,7 +361,9 @@ function start(port = 9847, autoOpen = true) {
     const { tasksJson, wishIds } = req.body;
     const result = pipeline.applyPlan(req.params.name, tasksJson, wishIds);
     if (result.success) {
-      broadcast(wss, { type: 'planApplied', data: { sessionName: req.params.name, ...result } });
+      // Include full task list with dependencies in broadcast
+      const tasks = pipeline.getTasks(req.params.name);
+      broadcast(wss, { type: 'planApplied', data: { sessionName: req.params.name, ...result, tasks } });
     }
     res.json(result);
   }));
@@ -371,6 +404,87 @@ function start(port = 9847, autoOpen = true) {
 
   app.get('/api/pipeline/:name/executions', safe((req, res) => {
     res.json(pipeline.getExecutionLog(req.params.name));
+  }));
+
+  // ─── Worktree / Merge API ───────────────────────────
+
+  const worktree = require('../lib/worktree');
+
+  // Merge/resolve task worktree branch
+  app.post('/api/pipeline/:name/tasks/:taskId/merge', safe((req, res) => {
+    const taskId = parseInt(req.params.taskId);
+    const { action } = req.body; // 'merge' (retry), 'rebase', or 'abort'
+    const resolveAction = action || 'merge';
+
+    const result = pipeline.resolveTaskMerge(taskId, resolveAction);
+
+    if (result.success && result.merged) {
+      broadcast(wss, { type: 'taskMerged', data: { sessionName: req.params.name, taskId } });
+    } else if (result.success && !result.merged) {
+      // abort case
+      broadcast(wss, { type: 'taskMergeAborted', data: { sessionName: req.params.name, taskId } });
+    } else if (result.conflictFiles) {
+      broadcast(wss, {
+        type: 'taskMergeConflict',
+        data: { sessionName: req.params.name, taskId, conflictFiles: result.conflictFiles }
+      });
+    }
+
+    res.json(result);
+  }));
+
+  // Get diff summary for a task's worktree branch
+  app.get('/api/pipeline/:name/tasks/:taskId/diff', safe((req, res) => {
+    const taskId = parseInt(req.params.taskId);
+    const sess = config.findSession(req.params.name);
+    if (!sess?.projectPath) return res.status(400).json({ error: 'No project path' });
+
+    const repoRoot = worktree.getRepoRoot(sess.projectPath);
+    if (!repoRoot) return res.status(400).json({ error: 'Not a git repository' });
+
+    const branch = `csm/task-${taskId}`;
+
+    try {
+      const stat = execSync(`git diff --stat main...${branch}`, {
+        cwd: repoRoot, stdio: 'pipe', encoding: 'utf8',
+      }).trim();
+
+      // Parse --stat output: last line like " 5 files changed, 42 insertions(+), 10 deletions(-)"
+      const lines = stat.split('\n');
+      const summaryLine = lines[lines.length - 1] || '';
+      const filesMatch = summaryLine.match(/(\d+)\s+files?\s+changed/);
+      const insMatch = summaryLine.match(/(\d+)\s+insertions?\(\+\)/);
+      const delMatch = summaryLine.match(/(\d+)\s+deletions?\(-\)/);
+
+      res.json({
+        files_changed: filesMatch ? parseInt(filesMatch[1]) : 0,
+        insertions: insMatch ? parseInt(insMatch[1]) : 0,
+        deletions: delMatch ? parseInt(delMatch[1]) : 0,
+        summary: stat,
+      });
+    } catch (err) {
+      // Branch may not exist yet or no diff
+      res.json({ files_changed: 0, insertions: 0, deletions: 0, summary: '' });
+    }
+  }));
+
+  // Open Terminal.app in worktree directory
+  app.post('/api/pipeline/:name/tasks/:taskId/open-terminal', safe((req, res) => {
+    const taskId = parseInt(req.params.taskId);
+    const wtPath = worktree.getWorktreePath(taskId);
+
+    if (!fs.existsSync(wtPath)) {
+      return res.status(404).json({ error: 'Worktree not found' });
+    }
+
+    try {
+      const escapedPath = wtPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const script = `tell application "Terminal"\nactivate\ndo script "cd \\"${escapedPath}\\" && pwd"\nend tell`;
+      execSync(`osascript -e ${JSON.stringify(script)}`, { timeout: 5000 });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }));
 
   // ─── Permissions API ────────────────────────────────

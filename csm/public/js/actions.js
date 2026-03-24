@@ -10,6 +10,7 @@ function selectProject(name) {
   State.selectedWish = null;
   State.editingWish = null;
   State.editingTask = null;
+  State.planningWishIds = new Set();
   renderProjects();
   renderTerminal();
 
@@ -38,6 +39,11 @@ async function checkPlanStatus() {
     } else {
       State.planningSession = null;
       State.planningProjects.delete(State.selected);
+      // If plan just completed (status 'done'), load the created tasks
+      if (status.status === 'done') {
+        loadWishes();
+        loadTasks();
+      }
     }
   } catch {}
 }
@@ -55,20 +61,59 @@ function selectTask(id) {
   renderTasks();
 
   const t = State.tasks.find(t => t.id === id);
-  if (t) {
-    el('termTitle').textContent = `Task: ${t.title}`;
-    el('termDot').className = `status-dot ${t.status}`;
+  if (!t) return;
 
-    if (t.status === 'running') {
-      // Poll live output from task's tmux session
-      // Show session's terminal output as fallback instead of bare "Running..."
-      const sessionOutput = State.sessions[State.selected]?.lastOutput;
-      el('termBody').textContent = t.execution_log || sessionOutput || 'Running... waiting for output';
-      pollTaskOutput(id);
+  const isPlan = t.type === 'plan';
+  const titlePrefix = isPlan ? 'Plan' : 'Task';
+  el('termTitle').textContent = `${titlePrefix}: ${t.title}`;
+  el('termDot').className = `status-dot ${t.status}`;
+
+  if (t.status === 'running') {
+    // Poll live output from task's tmux session (both task and plan types)
+    const initialMsg = isPlan
+      ? 'AI is planning... waiting for output'
+      : (t.execution_log || 'Running... waiting for output');
+    el('termBody').textContent = initialMsg;
+    pollTaskOutput(id);
+  } else if (t.status === 'pending') {
+    if (isPlan) {
+      el('termBody').textContent = `[Planning queued] ${t.description || 'Waiting to start planning...'}`;
     } else {
-      el('termBody').textContent = t.execution_log || t.description;
+      el('termBody').textContent = `[Pending] ${t.description || 'No description'}\n\nClick "Run" or "Silent" to execute this task.`;
     }
+  } else if (t.status === 'completed') {
+    el('termBody').textContent = t.execution_log || t.result || t.description || (isPlan ? 'Planning completed.' : 'Task completed.');
+  } else if (t.status === 'failed') {
+    el('termBody').textContent = t.execution_log || t.result || (isPlan ? 'Planning failed.' : 'Task failed.');
+  } else {
+    el('termBody').textContent = t.execution_log || t.description || '(no output)';
   }
+
+  // For non-running tasks, check if there's saved terminal output from DB
+  if (t.status !== 'running' && State.selected) {
+    fetchTaskTerminal(id);
+  }
+}
+
+async function fetchTaskTerminal(taskId) {
+  if (State.selectedTask !== taskId || !State.selected) return;
+  try {
+    const status = await API.taskExecStatus(State.selected, taskId);
+    if (State.selectedTask !== taskId) return;
+
+    if (status.preview) {
+      el('termBody').textContent = status.preview;
+    } else if (status.lastOutput) {
+      el('termBody').textContent = status.lastOutput;
+    }
+    // If tmux session ended, show that info
+    if (status.tmuxSession && status.tmuxAlive === false) {
+      const existing = el('termBody').textContent;
+      if (!existing || existing === '(no output)') {
+        el('termBody').textContent = `Session ended: ${status.tmuxSession}\n\n${status.lastOutput || 'No output saved.'}`;
+      }
+    }
+  } catch {}
 }
 
 async function pollTaskOutput(taskId) {
@@ -77,6 +122,9 @@ async function pollTaskOutput(taskId) {
   try {
     const status = await API.taskExecStatus(State.selected, taskId);
     if (State.selectedTask !== taskId) return; // switched away
+
+    // Update mode from exec-status response
+    if (status.mode) State.taskModes[taskId] = status.mode;
 
     // Only update content and scroll when live mode is on
     if (State.liveMode && status.preview) {
@@ -132,6 +180,12 @@ async function loadWishes() {
   if (!State.selected) return;
   try {
     State.wishes = await API.getWishes(State.selected);
+    // Rebuild planningWishIds from wishes that have planning_batch_id but aren't processed yet
+    if (State.planningProjects.has(State.selected)) {
+      State.planningWishIds = new Set(
+        State.wishes.filter(w => w.planning_batch_id && !w.processed).map(w => w.id)
+      );
+    }
     renderWishes();
   } catch (err) { handleApiError(err, 'loadWishes'); }
 }
@@ -140,6 +194,14 @@ async function loadTasks() {
   if (!State.selected) return;
   try {
     State.tasks = await API.getTasks(State.selected);
+    // Extract dependency info from tasks if provided by backend
+    for (const t of State.tasks) {
+      if (t.dependencies && Array.isArray(t.dependencies) && t.dependencies.length > 0) {
+        State.taskDependencies[t.id] = t.dependencies;
+      } else {
+        delete State.taskDependencies[t.id];
+      }
+    }
     updateTaskCountsFromTasks(State.selected, State.tasks);
     renderTasks();
     renderProjects();
@@ -166,7 +228,7 @@ async function reloadTaskCountsFor(name) {
 }
 
 function updateTaskCountsFromTasks(name, tasks) {
-  const counts = { completed: 0, running: 0, pending: 0, failed: 0, total: tasks.length };
+  const counts = { completed: 0, running: 0, pending: 0, failed: 0, merge_pending: 0, total: tasks.length };
   for (const t of tasks) {
     if (counts[t.status] !== undefined) counts[t.status]++;
   }
@@ -332,8 +394,8 @@ async function pollPlanStatus() {
     }
 
     if (status.status === 'done') {
-      loadWishes();
-      loadTasks();
+      await loadWishes();
+      await loadTasks();
       el('planBtn').disabled = false;
       el('planBtn').textContent = `Plan (${status.count || 0} tasks created)`;
       setTimeout(() => { el('planBtn').textContent = 'Plan'; }, 3000);
@@ -342,7 +404,10 @@ async function pollPlanStatus() {
       el('planBtn').disabled = false;
       el('planBtn').textContent = 'Plan';
     } else {
-      // idle — planning finished or was never started
+      // idle — plan was consumed by another call (e.g. checkPlanStatus)
+      // or was never started; reload tasks as safety net
+      await loadWishes();
+      await loadTasks();
       el('planBtn').disabled = false;
       el('planBtn').textContent = 'Plan';
     }
@@ -362,26 +427,44 @@ function openPlanningTerminal() {
   }
 }
 
+function getActiveBlockers(taskId) {
+  const deps = State.taskDependencies[taskId];
+  if (!deps || !Array.isArray(deps)) return [];
+  return deps.filter(d => d.blockerStatus === 'running' || d.blockerStatus === 'pending');
+}
+
 async function runTaskInteractive(taskId) {
   if (!State.selected) return;
+  const blockers = getActiveBlockers(taskId);
+  if (blockers.length > 0) {
+    const names = blockers.map(b => `  - ${b.blockerTitle || 'Task #' + b.blockerTaskId} (${b.blockerStatus})`).join('\n');
+    if (!confirm(`Эта задача имеет незавершённые блокеры:\n${names}\n\nВсё равно запустить?`)) return;
+  }
   try {
     const result = await API.executeInteractive(State.selected, taskId);
     if (!result.started) {
       showToast(result.reason || 'Не удалось запустить задачу', 'warning');
       return;
     }
+    if (result.mode) State.taskModes[result.taskId] = result.mode;
     loadTasks();
   } catch (err) { handleApiError(err, 'runTaskInteractive'); }
 }
 
 async function runTaskSilent(taskId) {
   if (!State.selected) return;
+  const blockers = getActiveBlockers(taskId);
+  if (blockers.length > 0) {
+    const names = blockers.map(b => `  - ${b.blockerTitle || 'Task #' + b.blockerTaskId} (${b.blockerStatus})`).join('\n');
+    if (!confirm(`Эта задача имеет незавершённые блокеры:\n${names}\n\nВсё равно запустить?`)) return;
+  }
   try {
     const result = await API.executeSilent(State.selected, taskId);
     if (!result.started) {
       showToast(result.reason || 'Не удалось запустить задачу', 'warning');
       return;
     }
+    if (result.mode) State.taskModes[result.taskId] = result.mode;
     loadTasks();
     pollTaskExec(taskId, result.tmuxSession);
   } catch (err) { handleApiError(err, 'runTaskSilent'); }
@@ -407,6 +490,55 @@ async function executeNext() {
     if (result.started) loadTasks();
     else showToast(result.reason || 'Нет задач для выполнения', 'info');
   } catch (err) { handleApiError(err, 'executeNext'); }
+}
+
+// ─── Worktree / Merge Actions ────────────────────
+
+async function mergeTask(taskId, action) {
+  if (!State.selected) return;
+  const label = action === 'abort' ? 'Abort merge for this task?' : `${action} task branch into main?`;
+  if (!confirm(label)) return;
+  try {
+    const result = await API.mergeTask(State.selected, taskId, action);
+    if (result.success && result.merged) {
+      showToast(`Branch ${action}d successfully`, 'success');
+    } else if (result.success && !result.merged) {
+      showToast('Merge aborted', 'info');
+    } else if (result.conflictFiles) {
+      showToast('Merge conflict — resolve manually or abort', 'warning');
+    } else {
+      showToast(result.error || 'Merge failed', 'error');
+    }
+    loadTasks();
+  } catch (err) { handleApiError(err, 'mergeTask'); }
+}
+
+async function openWorktreeTerminal(taskId) {
+  if (!State.selected) return;
+  try {
+    await API.openWorktreeTerminal(State.selected, taskId);
+  } catch (err) { handleApiError(err, 'openWorktreeTerminal'); }
+}
+
+async function runAiReview(taskId) {
+  if (!State.selected) return;
+  const t = State.tasks.find(t => t.id === taskId);
+  if (!t) return;
+  const branch = t.worktree_branch || `csm/task-${taskId}`;
+  try {
+    await API.addWish(State.selected, `Review changes in ${branch}`);
+    showToast('Review wish created — run Plan to start', 'info');
+    loadWishes();
+  } catch (err) { handleApiError(err, 'runAiReview'); }
+}
+
+async function loadTaskDiff(taskId) {
+  if (!State.selected || State.taskDiffs[taskId]) return;
+  try {
+    const diff = await API.getTaskDiff(State.selected, taskId);
+    State.taskDiffs[taskId] = diff;
+    renderTasks();
+  } catch { /* ignore — diff not available */ }
 }
 
 // ─── Terminal Actions ────────────────────────────

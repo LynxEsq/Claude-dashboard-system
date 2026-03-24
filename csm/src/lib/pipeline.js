@@ -18,6 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const tmux = require('./tmux');
 const config = require('./config');
+const worktree = require('./worktree');
 const { openDatabase, cleanAnsi } = require('./utils');
 
 let db = null;
@@ -37,6 +38,7 @@ function initTables() {
       content TEXT NOT NULL,
       processed INTEGER DEFAULT 0,
       task_ids TEXT,
+      planning_batch_id TEXT,
       created_at DATETIME DEFAULT (datetime('now')),
       processed_at DATETIME
     );
@@ -89,6 +91,21 @@ function initTables() {
       ON session_mappings(task_id);
     CREATE INDEX IF NOT EXISTS idx_session_mappings_active
       ON session_mappings(status, session_name);
+
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      blocked_by_task_id INTEGER NOT NULL,
+      reason TEXT,
+      created_at DATETIME DEFAULT (datetime('now')),
+      FOREIGN KEY (task_id) REFERENCES tasks(id),
+      FOREIGN KEY (blocked_by_task_id) REFERENCES tasks(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_deps_task
+      ON task_dependencies(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_deps_blocker
+      ON task_dependencies(blocked_by_task_id);
   `);
 
   // Migrations: add columns if missing (existing databases)
@@ -102,6 +119,31 @@ function initTables() {
     }
     if (!cols.includes('result')) {
       db.exec("ALTER TABLE tasks ADD COLUMN result TEXT");
+    }
+    if (!cols.includes('worktree_path')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN worktree_path TEXT");
+    }
+    if (!cols.includes('worktree_branch')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN worktree_branch TEXT");
+    }
+    if (!cols.includes('merge_conflict_files')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN merge_conflict_files TEXT");
+    }
+  } catch {}
+
+  // Migration: add worktree_path to session_mappings
+  try {
+    const smCols = db.prepare("PRAGMA table_info(session_mappings)").all().map(c => c.name);
+    if (!smCols.includes('worktree_path')) {
+      db.exec("ALTER TABLE session_mappings ADD COLUMN worktree_path TEXT");
+    }
+  } catch {}
+
+  // Migration: add planning_batch_id to wishes
+  try {
+    const wishCols = db.prepare("PRAGMA table_info(wishes)").all().map(c => c.name);
+    if (!wishCols.includes('planning_batch_id')) {
+      db.exec("ALTER TABLE wishes ADD COLUMN planning_batch_id TEXT");
     }
   } catch {}
 }
@@ -141,6 +183,13 @@ function deleteWish(id) {
   getDb().prepare('DELETE FROM wishes WHERE id = ?').run(id);
 }
 
+function clearWishesBatchId(wishIds) {
+  const stmt = getDb().prepare('UPDATE wishes SET planning_batch_id = NULL WHERE id = ?');
+  for (const id of wishIds) {
+    stmt.run(id);
+  }
+}
+
 function markWishesProcessed(wishIds, taskIds) {
   const stmt = getDb().prepare(`
     UPDATE wishes
@@ -178,30 +227,45 @@ function updateTask(id, fields) {
 }
 
 function deleteTask(id) {
+  removeTaskDependencies(id);
   getDb().prepare('DELETE FROM execution_log WHERE task_id = ?').run(id);
   getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id);
 }
 
 function getTasks(sessionName, status = null) {
+  let tasks;
   if (status) {
-    return getDb().prepare(`
-      SELECT * FROM tasks
-      WHERE session_name = ? AND status = ?
-      ORDER BY priority DESC, created_at ASC
+    tasks = getDb().prepare(`
+      SELECT t.*, sm.tmux_session_name, sm.status as tmux_status
+      FROM tasks t
+      LEFT JOIN session_mappings sm ON t.id = sm.task_id
+      WHERE t.session_name = ? AND t.status = ?
+      ORDER BY t.priority DESC, t.created_at ASC
     `).all(sessionName, status);
+  } else {
+    tasks = getDb().prepare(`
+      SELECT t.*, sm.tmux_session_name, sm.status as tmux_status
+      FROM tasks t
+      LEFT JOIN session_mappings sm ON t.id = sm.task_id
+      WHERE t.session_name = ?
+      ORDER BY
+        CASE t.status
+          WHEN 'running' THEN 0
+          WHEN 'merge_pending' THEN 1
+          WHEN 'pending' THEN 2
+          WHEN 'completed' THEN 3
+          WHEN 'failed' THEN 4
+        END,
+        t.priority DESC, t.created_at ASC
+    `).all(sessionName);
   }
-  return getDb().prepare(`
-    SELECT * FROM tasks
-    WHERE session_name = ?
-    ORDER BY
-      CASE status
-        WHEN 'running' THEN 0
-        WHEN 'pending' THEN 1
-        WHEN 'completed' THEN 2
-        WHEN 'failed' THEN 3
-      END,
-      priority DESC, created_at ASC
-  `).all(sessionName);
+
+  // Attach blocked_by info to each task
+  for (const task of tasks) {
+    task.blocked_by = getBlockersForTask(task.id);
+  }
+
+  return tasks;
 }
 
 function getAllTasks(limit = 100) {
@@ -270,18 +334,18 @@ function getExecutionLog(sessionName, limit = 20) {
 
 // ─── Session Mappings (persistent task↔tmux) ─────────
 
-function saveSessionMapping(taskId, tmuxSessionName, sessionName) {
+function saveSessionMapping(taskId, tmuxSessionName, sessionName, worktreePath = null) {
   // Upsert: if mapping already exists, update it
   const existing = getDb().prepare('SELECT id FROM session_mappings WHERE task_id = ?').get(taskId);
   if (existing) {
     getDb().prepare(`
-      UPDATE session_mappings SET tmux_session_name = ?, session_name = ?, status = 'active', ended_at = NULL
+      UPDATE session_mappings SET tmux_session_name = ?, session_name = ?, worktree_path = ?, status = 'active', ended_at = NULL
       WHERE task_id = ?
-    `).run(tmuxSessionName, sessionName, taskId);
+    `).run(tmuxSessionName, sessionName, worktreePath, taskId);
   } else {
     getDb().prepare(`
-      INSERT INTO session_mappings (task_id, tmux_session_name, session_name) VALUES (?, ?, ?)
-    `).run(taskId, tmuxSessionName, sessionName);
+      INSERT INTO session_mappings (task_id, tmux_session_name, session_name, worktree_path) VALUES (?, ?, ?, ?)
+    `).run(taskId, tmuxSessionName, sessionName, worktreePath);
   }
 }
 
@@ -350,10 +414,80 @@ function restoreSessionMappings() {
         sessionName: m.session_name,
         execId: null, // can't restore, but not critical
         mode,
+        worktreePath: m.worktree_path || null,
         startedAt: new Date(m.created_at).getTime(),
       });
     }
   }
+}
+
+// ─── Task Dependencies ─────────────────────────────────
+
+/**
+ * Save dependencies for a task (blocked_by relationships).
+ * @param {number} taskId - The task that is blocked
+ * @param {Array<{task_id: number, reason: string}>} blockers - Array of blocker info
+ */
+function saveTaskDependencies(taskId, blockers) {
+  if (!blockers || !Array.isArray(blockers) || blockers.length === 0) return;
+  const stmt = getDb().prepare(`
+    INSERT INTO task_dependencies (task_id, blocked_by_task_id, reason) VALUES (?, ?, ?)
+  `);
+  for (const b of blockers) {
+    const blockerTaskId = b.task_id || b.blocked_by_task_id;
+    if (!blockerTaskId) continue;
+    // Verify blocker task exists
+    const exists = getDb().prepare('SELECT id FROM tasks WHERE id = ?').get(blockerTaskId);
+    if (exists) {
+      stmt.run(taskId, blockerTaskId, b.reason || null);
+    }
+  }
+}
+
+/**
+ * Get all dependencies for a task (what blocks it).
+ * Returns array of { task_id, blocked_by_task_id, title, status, reason }
+ */
+function getTaskDependencies(taskId) {
+  return getDb().prepare(`
+    SELECT td.task_id, td.blocked_by_task_id, td.reason,
+           t.title, t.status
+    FROM task_dependencies td
+    JOIN tasks t ON td.blocked_by_task_id = t.id
+    WHERE td.task_id = ?
+  `).all(taskId);
+}
+
+/**
+ * Get blockers for a task: returns array of { task_id, title, status, reason }
+ */
+function getBlockersForTask(taskId) {
+  return getDb().prepare(`
+    SELECT td.blocked_by_task_id as task_id, t.title, t.status, td.reason
+    FROM task_dependencies td
+    JOIN tasks t ON td.blocked_by_task_id = t.id
+    WHERE td.task_id = ?
+  `).all(taskId);
+}
+
+/**
+ * Get tasks that are blocked by a given task.
+ */
+function getDependentsOfTask(taskId) {
+  return getDb().prepare(`
+    SELECT td.task_id, t.title, t.status, td.reason
+    FROM task_dependencies td
+    JOIN tasks t ON td.task_id = t.id
+    WHERE td.blocked_by_task_id = ?
+  `).all(taskId);
+}
+
+/**
+ * Remove all dependencies for a task (both as blocked and as blocker).
+ */
+function removeTaskDependencies(taskId) {
+  getDb().prepare('DELETE FROM task_dependencies WHERE task_id = ?').run(taskId);
+  getDb().prepare('DELETE FROM task_dependencies WHERE blocked_by_task_id = ?').run(taskId);
 }
 
 // ─── Task Planning (AI Integration) ────────────────────
@@ -372,11 +506,19 @@ function generatePlanningPrompt(sessionName, wishes, existingTasks) {
     .map((t, i) => `${i + 1}. [task-${t.id}] ${t.title}: ${t.description}`)
     .join('\n');
 
+  const runningTasks = existingTasks
+    .filter(t => t.status === 'running')
+    .map((t, i) => `${i + 1}. [task-${t.id}] ${t.title}: ${t.description}`)
+    .join('\n');
+
   return `You are a task planner for the project session "${sessionName}".
 
 ## New Wishes (unprocessed inbox items from the user):
 ${wishList}
 
+${runningTasks ? `## Currently Running Tasks (actively being executed NOW):
+${runningTasks}
+` : ''}
 ${pendingTasks ? `## Existing Pending Tasks (already created, DO NOT duplicate):
 ${pendingTasks}
 ` : ''}
@@ -396,6 +538,15 @@ Convert the NEW wishes into actionable tasks. CRITICAL RULES:
 - For brand new tasks, use "action": "create"
 - Return ALL actions needed: creates, updates, and deletes
 
+## DEPENDENCY DETECTION — VERY IMPORTANT:
+Analyze whether new tasks depend on (are blocked by) existing running or pending tasks.
+A task is BLOCKED if:
+- It modifies the same files/modules as a running or pending task (conflict risk)
+- It depends on output or changes from another task (sequential dependency)
+- It extends or builds upon functionality being created by another task
+
+For each new task, if it has blockers, include "blocked_by" array with objects specifying the blocker task ID and reason.
+
 ## Output Format:
 Return a JSON object with this structure:
 {
@@ -410,7 +561,10 @@ Each item in "tasks" array:
   "title": "Short task title",  // for "create"/"update"
   "description": "Detailed description",  // for "create"/"update"
   "wish_ids": [4, 5],           // IDs of NEW wishes this addresses
-  "priority": 0-10              // higher = more urgent
+  "priority": 0-10,             // higher = more urgent
+  "blocked_by": [               // optional: array of blocker tasks (omit if no dependencies)
+    { "task_id": 12, "reason": "Modifies the same auth module currently being refactored" }
+  ]
 }
 
 If no new tasks are needed (e.g. wishes are questions, already covered by existing tasks, or just recommendations), return:
@@ -427,42 +581,13 @@ Return ONLY the JSON object, no markdown, no explanation.`;
  * Creates a temporary tmux session, runs Claude with the task prompt, monitors completion.
  */
 function executeNextTask(sessionName) {
-  if (hasRunningTask(sessionName)) {
-    return { started: false, reason: 'A task is already running' };
-  }
-
   const task = getNextPendingTask(sessionName);
   if (!task) {
     return { started: false, reason: 'No pending tasks' };
   }
 
-  // Get the existing session config
-  const sessConfig = config.findSession(sessionName);
-  if (!sessConfig) {
-    return { started: false, reason: 'Session not found in config' };
-  }
-
-  // Check that tmux session exists
-  if (!tmux.sessionExists(sessConfig.tmuxSession)) {
-    return { started: false, reason: 'tmux session not found — is it running?' };
-  }
-
-  // Mark task as running
-  updateTaskStatus(task.id, 'running');
-
-  // Log execution
-  const execId = logExecution(task.id, sessionName, sessConfig.tmuxSession);
-
-  // Send task description directly to the existing Claude session
-  const prompt = task.description;
-  tmux.sendText(sessConfig.tmuxSession, sessConfig.tmuxWindow, sessConfig.tmuxPane, prompt);
-
-  return {
-    started: true,
-    taskId: task.id,
-    execId,
-    tmuxSession: sessConfig.tmuxSession,
-  };
+  // Delegate to executeTaskInteractive for task-level session isolation
+  return executeTaskInteractive(sessionName, task.id);
 }
 
 // Track active task executions (both interactive and silent): taskId -> { tmuxSession, outputFile, sessionName, mode }
@@ -486,6 +611,20 @@ function executeTaskInteractive(sessionName, taskId) {
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
 
+  // Try to create a git worktree for task isolation
+  let worktreePath = null;
+  if (projectPath && fs.existsSync(projectPath)) {
+    try {
+      const wt = worktree.createWorktree(projectPath, taskId);
+      if (wt) {
+        worktreePath = wt.worktreePath;
+        cwd = worktreePath;
+      }
+    } catch (e) {
+      console.error('[Task] Failed to create worktree, using project path:', e.message);
+    }
+  }
+
   // Verify claude CLI is available
   findClaudeBin();
 
@@ -495,6 +634,10 @@ function executeTaskInteractive(sessionName, taskId) {
   tmux.killSession(execTmux);
   const result = tmux.createSession(execTmux, cwd, true); // startClaude = true
   if (!result.success) {
+    // Clean up worktree on failure
+    if (worktreePath) {
+      try { worktree.deleteWorktree(taskId, projectPath); } catch {}
+    }
     return { started: false, reason: 'Cannot create session: ' + result.error };
   }
 
@@ -518,18 +661,24 @@ function executeTaskInteractive(sessionName, taskId) {
   }, 5000);
 
   updateTaskStatus(taskId, 'running');
+  // Save worktree_path and worktree_branch in the tasks table
+  if (worktreePath) {
+    const branch = `csm/task-${taskId}`;
+    getDb().prepare('UPDATE tasks SET worktree_path = ?, worktree_branch = ? WHERE id = ?').run(worktreePath, branch, taskId);
+  }
   const execId = logExecution(taskId, sessionName, execTmux);
-  saveSessionMapping(taskId, execTmux, sessionName);
+  saveSessionMapping(taskId, execTmux, sessionName, worktreePath);
 
   activeExecs.set(taskId, {
     tmuxSession: execTmux,
     sessionName,
     execId,
     mode: 'interactive',
+    worktreePath,
     startedAt: Date.now(),
   });
 
-  return { started: true, taskId, execId, tmuxSession: execTmux };
+  return { started: true, taskId, execId, tmuxSession: execTmux, mode: 'interactive', worktreePath };
 }
 
 /**
@@ -550,6 +699,20 @@ function executeTaskSilent(sessionName, taskId) {
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
 
+  // Try to create a git worktree for task isolation
+  let worktreePath = null;
+  if (projectPath && fs.existsSync(projectPath)) {
+    try {
+      const wt = worktree.createWorktree(projectPath, taskId);
+      if (wt) {
+        worktreePath = wt.worktreePath;
+        cwd = worktreePath;
+      }
+    } catch (e) {
+      console.error('[Task] Failed to create worktree, using project path:', e.message);
+    }
+  }
+
   const safeName = tmux.safeTmuxName(sessionName);
   const execTmux = `csm-exec-${safeName}-${taskId}`;
   const ts = Date.now();
@@ -565,6 +728,10 @@ function executeTaskSilent(sessionName, taskId) {
   tmux.killSession(execTmux);
   const result = tmux.createSession(execTmux, cwd, false);
   if (!result.success) {
+    // Clean up worktree on failure
+    if (worktreePath) {
+      try { worktree.deleteWorktree(taskId, projectPath); } catch {}
+    }
     return { started: false, reason: 'Cannot create exec session: ' + result.error };
   }
   fs.writeFileSync(scriptFile, [
@@ -590,8 +757,13 @@ function executeTaskSilent(sessionName, taskId) {
   }
 
   updateTaskStatus(taskId, 'running');
+  // Save worktree_path and worktree_branch in the tasks table
+  if (worktreePath) {
+    const branch = `csm/task-${taskId}`;
+    getDb().prepare('UPDATE tasks SET worktree_path = ?, worktree_branch = ? WHERE id = ?').run(worktreePath, branch, taskId);
+  }
   const execId = logExecution(taskId, sessionName, execTmux);
-  saveSessionMapping(taskId, execTmux, sessionName);
+  saveSessionMapping(taskId, execTmux, sessionName, worktreePath);
 
   activeExecs.set(taskId, {
     tmuxSession: execTmux,
@@ -600,21 +772,44 @@ function executeTaskSilent(sessionName, taskId) {
     scriptFile,
     sessionName,
     execId,
+    mode: 'silent',
+    worktreePath,
     startedAt: Date.now(),
   });
 
-  return { started: true, taskId, execId, tmuxSession: execTmux };
+  return { started: true, taskId, execId, tmuxSession: execTmux, mode: 'silent', worktreePath };
 }
 
 /**
- * Check task execution status (works for both interactive and silent modes).
+ * Check task execution status (works for interactive, silent, and plan modes).
  */
 function getTaskExecStatus(sessionName, taskId) {
+  // Check activePlans for plan-type tasks
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!task) return { status: 'unknown' };
+
+  if (task.type === 'plan') {
+    // Find the plan entry by matching planTaskId
+    for (const [planSession, plan] of activePlans) {
+      if (plan.planTaskId === taskId) {
+        const tmuxAlive = tmux.sessionExists(plan.tmuxSession);
+        if (tmuxAlive) {
+          const paneOutput = tmux.capturePane(plan.tmuxSession, null, null) || '';
+          return {
+            status: 'running',
+            tmuxSession: plan.tmuxSession,
+            mode: 'plan',
+            elapsed: Date.now() - plan.startedAt,
+            preview: paneOutput,
+          };
+        }
+        break;
+      }
+    }
+  }
+
   const exec = activeExecs.get(taskId);
   if (!exec) {
-    const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) return { status: 'unknown' };
-
     // Check persistent session mapping
     const mapping = getSessionMapping(taskId);
     const tmuxSessionName = mapping?.tmux_session_name || null;
@@ -626,7 +821,9 @@ function getTaskExecStatus(sessionName, taskId) {
       return {
         status: 'running',
         tmuxSession: tmuxSessionName,
-        mode: tmuxSessionName.startsWith('csm-exec-') ? 'silent' : 'interactive',
+        mode: tmuxSessionName.startsWith('csm-exec-') ? 'silent'
+            : tmuxSessionName.startsWith('csm-plan-') ? 'plan'
+            : 'interactive',
         preview: paneOutput,
       };
     }
@@ -658,6 +855,13 @@ function getTaskExecStatus(sessionName, taskId) {
     endSessionMapping(taskId);
     updateTaskStatus(taskId, 'completed', 'Session ended (tmux session disappeared)');
     activeExecs.delete(taskId);
+
+    // Attempt merge if task had a worktree
+    const freshTask = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (freshTask?.worktree_path) {
+      const mergeResult = tryMergeWorktreeBranch(taskId, freshTask);
+      return { status: mergeResult.conflict ? 'merge_pending' : 'completed', reason: 'Session ended', merge: mergeResult };
+    }
     return { status: 'completed', reason: 'Session ended' };
   }
 
@@ -679,10 +883,19 @@ function getTaskExecStatus(sessionName, taskId) {
       // Kill the tmux session now that the task is done
       tmux.killSession(exec.tmuxSession);
       activeExecs.delete(taskId);
+
+      // Attempt merge if task had a worktree
+      const freshTask = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+      let mergeResult = null;
+      if (freshTask?.worktree_path) {
+        mergeResult = tryMergeWorktreeBranch(taskId, freshTask);
+      }
+
       return {
-        status: 'completed',
+        status: mergeResult?.conflict ? 'merge_pending' : 'completed',
         mode: 'interactive',
         output: cleanOutput.substring(cleanOutput.length - 500),
+        merge: mergeResult,
       };
     }
 
@@ -722,7 +935,164 @@ function getTaskExecStatus(sessionName, taskId) {
   tmux.killSession(exec.tmuxSession);
   activeExecs.delete(taskId);
 
-  return { status: 'completed', output: cleanOutput.substring(0, 500) };
+  // Attempt merge if task had a worktree
+  const freshTask = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  let mergeResult = null;
+  if (freshTask?.worktree_path) {
+    mergeResult = tryMergeWorktreeBranch(taskId, freshTask);
+  }
+
+  return {
+    status: mergeResult?.conflict ? 'merge_pending' : 'completed',
+    output: cleanOutput.substring(0, 500),
+    merge: mergeResult,
+  };
+}
+
+// ─── Worktree Merge Logic ───────────────────────────────
+
+/**
+ * Attempt to merge a task's worktree branch into the main branch.
+ * Must be run from the main project directory (not the worktree).
+ *
+ * @param {number} taskId
+ * @param {object} task - task row from DB (needs worktree_path, worktree_branch, session_name)
+ * @returns {{ merged: boolean, conflict: boolean, conflictFiles: string[]|null, error: string|null }}
+ */
+function tryMergeWorktreeBranch(taskId, task) {
+  if (!task.worktree_path || !task.worktree_branch) {
+    return { merged: false, conflict: false, error: 'No worktree info' };
+  }
+
+  const sessConfig = config.findSession(task.session_name);
+  const projectPath = sessConfig?.projectPath;
+  if (!projectPath) {
+    return { merged: false, conflict: false, error: 'No projectPath for session' };
+  }
+
+  const repoRoot = worktree.getRepoRoot(projectPath);
+  if (!repoRoot) {
+    return { merged: false, conflict: false, error: 'Not a git repo' };
+  }
+
+  const branch = task.worktree_branch;
+
+  try {
+    execSync(`git merge --no-ff "${branch}" -m "Merge ${branch}: task #${taskId}"`, {
+      cwd: repoRoot,
+      stdio: 'pipe',
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Merge succeeded — clean up worktree and branch
+    worktree.deleteWorktree(taskId, projectPath);
+    try {
+      execSync(`git branch -d "${branch}"`, { cwd: repoRoot, stdio: 'pipe' });
+    } catch { /* branch may already be deleted by deleteWorktree */ }
+
+    // Clear worktree info from task
+    getDb().prepare('UPDATE tasks SET worktree_path = NULL, worktree_branch = NULL, result = ? WHERE id = ?')
+      .run('Merged successfully', taskId);
+
+    return { merged: true, conflict: false, conflictFiles: null, error: null };
+  } catch (mergeErr) {
+    const errMsg = mergeErr.stderr || mergeErr.stdout || mergeErr.message || '';
+
+    // Check if it's a merge conflict
+    if (errMsg.includes('CONFLICT') || errMsg.includes('Automatic merge failed')) {
+      // Abort the failed merge in the main repo
+      try {
+        execSync('git merge --abort', { cwd: repoRoot, stdio: 'pipe' });
+      } catch { /* ignore */ }
+
+      // Extract conflicting file names
+      let conflictFiles = [];
+      const conflictMatches = errMsg.match(/CONFLICT \([^)]+\): (?:Merge conflict in )?(.+)/g);
+      if (conflictMatches) {
+        conflictFiles = conflictMatches.map(m => {
+          const match = m.match(/CONFLICT \([^)]+\): (?:Merge conflict in )?(.+)/);
+          return match ? match[1].trim() : m;
+        });
+      }
+
+      // Set task to merge_pending — do NOT delete worktree
+      getDb().prepare("UPDATE tasks SET status = ?, merge_conflict_files = ?, result = ?, updated_at = datetime('now') WHERE id = ?")
+        .run('merge_pending', JSON.stringify(conflictFiles), 'Merge conflict: ' + conflictFiles.join(', '), taskId);
+
+      return { merged: false, conflict: true, conflictFiles, error: null };
+    }
+
+    // Some other git error
+    return { merged: false, conflict: false, error: errMsg.substring(0, 500) };
+  }
+}
+
+/**
+ * Resolve a merge_pending task.
+ * @param {number} taskId
+ * @param {'merge'|'rebase'|'abort'} action
+ * @returns {{ success: boolean, error?: string, merged?: boolean, conflict?: boolean, conflictFiles?: string[] }}
+ */
+function resolveTaskMerge(taskId, action) {
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!task) return { success: false, error: 'Task not found' };
+  if (task.status !== 'merge_pending') return { success: false, error: 'Task is not in merge_pending status' };
+
+  const sessConfig = config.findSession(task.session_name);
+  const projectPath = sessConfig?.projectPath;
+  if (!projectPath) return { success: false, error: 'No projectPath for session' };
+
+  const repoRoot = worktree.getRepoRoot(projectPath);
+  if (!repoRoot) return { success: false, error: 'Not a git repo' };
+
+  const branch = task.worktree_branch;
+  if (!branch) return { success: false, error: 'No worktree branch info' };
+
+  if (action === 'abort') {
+    // Delete worktree and branch, mark task as completed without merge
+    worktree.deleteWorktree(taskId, projectPath);
+    try {
+      execSync(`git branch -D "${branch}"`, { cwd: repoRoot, stdio: 'pipe' });
+    } catch { /* branch may not exist */ }
+
+    getDb().prepare("UPDATE tasks SET status = ?, worktree_path = NULL, worktree_branch = NULL, merge_conflict_files = NULL, result = ?, updated_at = datetime('now') WHERE id = ?")
+      .run('completed', 'Merge aborted — worktree and branch deleted', taskId);
+
+    return { success: true, merged: false };
+  }
+
+  if (action === 'rebase') {
+    // Rebase the task branch onto the current main branch, then retry merge
+    try {
+      if (task.worktree_path && fs.existsSync(task.worktree_path)) {
+        execSync('git rebase HEAD', {
+          cwd: task.worktree_path,
+          stdio: 'pipe',
+          encoding: 'utf8',
+          timeout: 60000,
+        });
+      }
+    } catch (rebaseErr) {
+      const errMsg = rebaseErr.stderr || rebaseErr.message || '';
+      // Abort failed rebase
+      try {
+        execSync('git rebase --abort', { cwd: task.worktree_path, stdio: 'pipe' });
+      } catch { /* ignore */ }
+      return { success: false, error: 'Rebase failed: ' + errMsg.substring(0, 300) };
+    }
+    // Fall through to retry merge
+  }
+
+  // action === 'merge' or post-rebase: retry the merge
+  const result = tryMergeWorktreeBranch(taskId, task);
+  if (result.merged) {
+    return { success: true, merged: true };
+  }
+  if (result.conflict) {
+    return { success: false, error: 'Merge conflict persists', conflictFiles: result.conflictFiles };
+  }
+  return { success: false, error: result.error || 'Merge failed' };
 }
 
 // Track active planning sessions: sessionName -> { tmuxSession, promptFile, outputFile, wishIds }
@@ -766,6 +1136,13 @@ function planTasks(sessionName) {
   const wishes = getUnprocessedWishes(sessionName);
   if (wishes.length === 0) {
     return { planned: false, reason: 'No unprocessed wishes' };
+  }
+
+  // Mark wishes with a planning batch ID so UI can distinguish them
+  const batchId = `plan-${Date.now()}`;
+  const markBatch = getDb().prepare('UPDATE wishes SET planning_batch_id = ? WHERE id = ?');
+  for (const w of wishes) {
+    markBatch.run(batchId, w.id);
   }
 
   const existingTasks = getTasks(sessionName);
@@ -857,6 +1234,7 @@ function planTasks(sessionName) {
     status: 'running',
     tmuxSession: planTmux,
     wishCount: wishes.length,
+    wishIds: wishes.map(w => w.id),
     planTaskId,
   };
 }
@@ -909,17 +1287,20 @@ function getPlanStatus(sessionName) {
       });
       endSessionMapping(plan.planTaskId);
     }
+    clearWishesBatchId(plan.wishIds);
     activePlans.delete(sessionName);
-    return { status: 'error', reason: 'Claude did not return valid JSON', raw: cleanOutput.substring(cleanOutput.length - 500) };
+    return { status: 'error', wishIds: plan.wishIds, reason: 'Claude did not return valid JSON', raw: cleanOutput.substring(cleanOutput.length - 500) };
   }
 
   tmux.killSession(plan.tmuxSession);
   if (plan.planTaskId) endSessionMapping(plan.planTaskId);
   activePlans.delete(sessionName);
 
-  const result = applyPlan(sessionName, tasksJson, plan.wishIds, plan.planTaskId);
+  const wishIds = plan.wishIds;
+  const result = applyPlan(sessionName, tasksJson, wishIds, plan.planTaskId);
   return {
     status: 'done',
+    wishIds,
     ...result,
   };
 }
@@ -1004,6 +1385,7 @@ function applyPlan(sessionName, tasksJson, wishIds, planTaskId = null) {
   }
 
   const createdTaskIds = [];
+  const pendingDependencies = []; // { taskId, blockers: [{task_id, reason}] }
   let updated = 0, deleted = 0, created = 0;
 
   for (const t of items) {
@@ -1018,6 +1400,11 @@ function applyPlan(sessionName, tasksJson, wishIds, planTaskId = null) {
       if (t.description) fields.description = t.description;
       if (t.priority != null) fields.priority = t.priority;
       updateTask(t.existing_id, fields);
+      // Update dependencies for existing tasks
+      if (t.blocked_by && Array.isArray(t.blocked_by) && t.blocked_by.length > 0) {
+        removeTaskDependencies(t.existing_id);
+        saveTaskDependencies(t.existing_id, t.blocked_by);
+      }
       updated++;
     } else {
       // create (or fallback for old format without action field)
@@ -1029,8 +1416,17 @@ function applyPlan(sessionName, tasksJson, wishIds, planTaskId = null) {
         t.priority || 0
       );
       createdTaskIds.push(taskId);
+      // Queue dependencies for saving after task creation
+      if (t.blocked_by && Array.isArray(t.blocked_by) && t.blocked_by.length > 0) {
+        pendingDependencies.push({ taskId, blockers: t.blocked_by });
+      }
       created++;
     }
+  }
+
+  // Save dependencies for newly created tasks
+  for (const dep of pendingDependencies) {
+    saveTaskDependencies(dep.taskId, dep.blockers);
   }
 
   // Mark wishes as processed
@@ -1064,6 +1460,7 @@ function cleanSession(sessionName) {
   const taskIds = d.prepare('SELECT id FROM tasks WHERE session_name = ?').all(sessionName).map(r => r.id);
   if (taskIds.length > 0) {
     const placeholders = taskIds.map(() => '?').join(',');
+    d.prepare(`DELETE FROM task_dependencies WHERE task_id IN (${placeholders}) OR blocked_by_task_id IN (${placeholders})`).run(...taskIds, ...taskIds);
     d.prepare(`DELETE FROM execution_log WHERE task_id IN (${placeholders})`).run(...taskIds);
   }
   d.prepare('DELETE FROM session_mappings WHERE session_name = ?').run(sessionName);
@@ -1106,6 +1503,7 @@ module.exports = {
   getUnprocessedWishes,
   getAllWishes,
   markWishesProcessed,
+  clearWishesBatchId,
   createTask,
   updateTask,
   deleteTask,
@@ -1126,10 +1524,17 @@ module.exports = {
   executeTaskSilent,
   getTaskExecStatus,
   applyPlan,
+  saveTaskDependencies,
+  getTaskDependencies,
+  getBlockersForTask,
+  getDependentsOfTask,
+  removeTaskDependencies,
   saveSessionMapping,
   getSessionMapping,
   getActiveSessionMappings,
   endSessionMapping,
   restoreSessionMappings,
+  tryMergeWorktreeBranch,
+  resolveTaskMerge,
   close,
 };

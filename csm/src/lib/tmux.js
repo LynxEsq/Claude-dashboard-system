@@ -165,7 +165,16 @@ function safeTmuxName(name) {
 
   // Keep only ASCII alphanumeric, dash, underscore
   result = result.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  return result || `session-${Date.now()}`;
+  if (!result) return `session-${Date.now()}`;
+
+  // Collision detection: append counter if session name already exists
+  const existing = listTmuxSessions();
+  if (!existing.includes(result)) return result;
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${result}-${i}`;
+    if (!existing.includes(candidate)) return candidate;
+  }
+  return `${result}-${Date.now()}`;
 }
 
 function escapeForTmux(str) {

@@ -47,6 +47,7 @@
 }
 
 .task-progress-segment.completed { background: var(--blue); }
+.task-progress-segment.merge-pending { background: var(--yellow, #e2b714); }
 .task-progress-segment.running { background: var(--green); animation: segment-pulse 2s ease-in-out infinite; }
 .task-progress-segment.pending { background: var(--text2); opacity: 0.3; }
 .task-progress-segment.failed { background: var(--red); }
@@ -142,6 +143,57 @@
 .wish-item.processed { opacity: 0.5; }
 .wish-item.processed .wish-content { text-decoration: line-through; }
 
+/* Wish currently being planned */
+.wish-item.wish-planning {
+  background: rgba(88,166,255,0.06);
+  border-color: rgba(88,166,255,0.3);
+  opacity: 0.7;
+  animation: wish-planning-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes wish-planning-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.45; }
+}
+
+.wish-planning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--blue);
+  font-weight: 500;
+}
+
+.wish-planning-badge::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  animation: planning-pulse 1.5s ease-in-out infinite;
+}
+
+/* Separator between planning and new wishes */
+.wish-group-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wish-group-separator::before,
+.wish-group-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 .wish-content { white-space: pre-wrap; }
 
 .wish-meta {
@@ -232,6 +284,7 @@
 .task-status.running { background: rgba(63,185,80,0.15); color: var(--green); }
 .task-status.completed { background: rgba(88,166,255,0.15); color: var(--blue); }
 .task-status.failed { background: rgba(248,81,73,0.15); color: var(--red); }
+.task-status.merge_pending { background: rgba(226,183,20,0.15); color: var(--yellow, #e2b714); }
 
 .task-title { font-size: 13px; font-weight: 500; flex: 1; }
 .task-desc {
@@ -313,6 +366,125 @@
 }
 
 .task-plan-result.markdown-body { white-space: normal; }
+
+/* ─── Task Dependency Tree ────────────────────── */
+.task-dep-group {
+  margin-left: 16px;
+  padding-left: 12px;
+  border-left: 2px solid var(--yellow, #e2b714);
+  margin-bottom: 6px;
+}
+
+.task-item.task-blocked {
+  opacity: 0.75;
+  border-left: 3px solid var(--yellow, #e2b714);
+}
+
+.task-item.task-blocked:hover { opacity: 0.9; }
+
+.task-blocker-label {
+  font-size: 10px;
+  color: var(--yellow, #e2b714);
+  padding: 2px 6px;
+  margin: 2px 0 4px;
+  background: rgba(226, 183, 20, 0.08);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.btn.btn-blocked {
+  opacity: 0.4;
+  border-style: dashed;
+}
+
+.btn.btn-blocked:hover {
+  opacity: 0.7;
+}
+
+/* ─── Worktree Badge ─────────────────────────── */
+.task-wt-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(139,148,158,0.15);
+  color: var(--text2);
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+/* ─── Merged Label ───────────────────────────── */
+.task-merged-label {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(63,185,80,0.15);
+  color: var(--green);
+  font-weight: 500;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ─── Worktree Path ──────────────────────────── */
+.task-wt-path {
+  font-size: 10px;
+  color: var(--text2);
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  padding: 3px 6px;
+  margin-top: 4px;
+  background: var(--bg);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+.task-wt-path:hover { color: var(--blue); }
+
+/* ─── Diff Summary ───────────────────────────── */
+.task-diff-summary {
+  font-size: 10px;
+  color: var(--text2);
+  margin-top: 4px;
+  padding: 2px 6px;
+}
+.task-diff-summary .diff-ins { color: var(--green); }
+.task-diff-summary .diff-del { color: var(--red); }
+
+/* ─── Merge Section ──────────────────────────── */
+.task-merge-section {
+  margin-top: 6px;
+  padding: 8px;
+  background: rgba(226,183,20,0.06);
+  border: 1px solid rgba(226,183,20,0.2);
+  border-radius: 6px;
+}
+
+.task-merge-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.task-conflict-files {
+  margin-top: 4px;
+}
+
+.task-conflict-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--yellow, #e2b714);
+  margin-bottom: 3px;
+}
+
+.task-conflict-file {
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  color: var(--red);
+  padding: 1px 6px;
+  line-height: 1.5;
+}
 
 .task-actions-bar {
   padding: 8px;

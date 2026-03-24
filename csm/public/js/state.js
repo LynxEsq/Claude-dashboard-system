@@ -15,7 +15,14 @@ const State = {
   liveMode: true,        // auto-refresh terminal output
   taskCounts: {},        // { sessionName: { completed, running, pending, failed, total } }
   selectedWish: null,    // wish id selected to show linked tasks
+  taskDependencies: {},  // { taskId: [{blockerTaskId, blockerTitle, blockerStatus, reason}] }
+  taskModes: {},         // { taskId: 'interactive' | 'silent' }
+  taskDiffs: {},         // { taskId: { files_changed, insertions, deletions, summary } }
+  planningWishIds: new Set(), // wish IDs currently being planned
 };
+
+// Task status order for sorting (merge_pending between running and completed)
+const TASK_STATUS_ORDER = { running: 0, merge_pending: 1, pending: 2, completed: 3, failed: 4 };
 
 const STATUS_LABELS = {
   working: 'Working',

@@ -94,6 +94,13 @@ const API = {
   }),
   taskExecStatus: (name, taskId) => apiFetch(`/api/pipeline/${name}/task-status/${taskId}`),
 
+  // ─── Worktree / Merge ─────────────────────────
+  mergeTask: (name, taskId, action) => apiFetch(`/api/pipeline/${name}/tasks/${taskId}/merge`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ action })
+  }),
+  getTaskDiff: (name, taskId) => apiFetch(`/api/pipeline/${name}/tasks/${taskId}/diff`),
+  openWorktreeTerminal: (name, taskId) => apiFetch(`/api/pipeline/${name}/tasks/${taskId}/open-terminal`, { method: 'POST' }),
+
   // ─── Terminal ───────────────────────────────
   sendKeys: (name, keys) => apiFetch(`/api/sessions/${name}/keys`, {
     method: 'POST', headers: CT, body: JSON.stringify({ keys })

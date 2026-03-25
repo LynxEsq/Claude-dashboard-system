@@ -50,17 +50,19 @@ function hasDisplay() {
  * Returns true if successful.
  */
 function _openLinuxTerminalExec(cmd) {
+  // Each entry: [binary, ...full shell command string]
+  // We build the full command manually to handle quoting correctly
   const terminals = [
-    ['x-terminal-emulator', '-e', cmd],
-    ['gnome-terminal', '--', 'bash', '-c', cmd],
-    ['konsole', '-e', cmd],
-    ['xfce4-terminal', '-e', cmd],
-    ['xterm', '-e', cmd],
+    { bin: 'xfce4-terminal', spawn: `xfce4-terminal -e "${cmd}"` },
+    { bin: 'gnome-terminal', spawn: `gnome-terminal -- bash -c "${cmd}"` },
+    { bin: 'x-terminal-emulator', spawn: `x-terminal-emulator -e "${cmd}"` },
+    { bin: 'konsole', spawn: `konsole -e ${cmd}` },
+    { bin: 'xterm', spawn: `xterm -e ${cmd}` },
   ];
-  for (const [bin, ...args] of terminals) {
+  for (const { bin, spawn } of terminals) {
     try {
       execSync(`which ${bin}`, { stdio: 'ignore' });
-      execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
+      execSync(`${spawn} &`, { timeout: 5000, shell: true, stdio: 'ignore' });
       return true;
     } catch { /* try next */ }
   }
@@ -73,16 +75,16 @@ function _openLinuxTerminalExec(cmd) {
  */
 function _openLinuxTerminalDir(safePath) {
   const terminals = [
-    ['x-terminal-emulator', `--working-directory=${safePath}`],
-    ['gnome-terminal', `--working-directory=${safePath}`],
-    ['konsole', '--workdir', safePath],
-    ['xfce4-terminal', `--working-directory=${safePath}`],
-    ['xterm', '-e', `bash -c "cd '${safePath}' && exec bash"`],
+    { bin: 'xfce4-terminal', spawn: `xfce4-terminal --working-directory="${safePath}"` },
+    { bin: 'gnome-terminal', spawn: `gnome-terminal --working-directory="${safePath}"` },
+    { bin: 'konsole', spawn: `konsole --workdir "${safePath}"` },
+    { bin: 'x-terminal-emulator', spawn: `x-terminal-emulator --working-directory="${safePath}"` },
+    { bin: 'xterm', spawn: `xterm -e "cd '${safePath}' && exec bash"` },
   ];
-  for (const [bin, ...args] of terminals) {
+  for (const { bin, spawn } of terminals) {
     try {
       execSync(`which ${bin}`, { stdio: 'ignore' });
-      execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
+      execSync(`${spawn} &`, { timeout: 5000, shell: true, stdio: 'ignore' });
       return true;
     } catch { /* try next */ }
   }

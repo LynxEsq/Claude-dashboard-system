@@ -256,10 +256,14 @@ function start(port = 9847, autoOpen = true, host) {
       tmuxName = sess.tmuxSession;
     }
 
+    const pInfo = platform.getPlatformInfo();
+    console.log(`[Terminal] Opening: platform=${pInfo.platform}, hasDisplay=${pInfo.hasDisplay}, tmux=${tmuxName}`);
+
     try {
       platform.openTerminalAttach(tmuxName);
       res.json({ success: true });
     } catch (err) {
+      console.error(`[Terminal] Failed:`, err.message);
       // Return fallback command so frontend can show it
       const safe = tmuxName.replace(/'/g, "'\\''");
       res.status(500).json({

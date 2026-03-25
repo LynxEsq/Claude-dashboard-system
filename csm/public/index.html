@@ -252,7 +252,18 @@
       <pre id="sshCommand" style="background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-all;color:var(--green);margin-bottom:8px;cursor:pointer" onclick="copySshCommand()" title="Click to copy"></pre>
       <button class="btn sm" onclick="copySshCommand()" style="position:absolute;top:6px;right:6px;font-size:11px" id="sshCopyBtn">Copy</button>
     </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <div style="flex:1">
+        <label style="font-size:11px;color:var(--text2)">SSH User</label>
+        <input type="text" id="ssh-user" style="font-size:12px" placeholder="auto-detected" onchange="saveSshOverride()">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:11px;color:var(--text2)">SSH Host / IP</label>
+        <input type="text" id="ssh-host" style="font-size:12px" placeholder="auto-detected" onchange="saveSshOverride()">
+      </div>
+    </div>
     <div class="modal-btns">
+      <button class="btn sm" onclick="resetSshOverride()" style="margin-right:auto;font-size:11px;opacity:0.7">Reset to auto</button>
       <button class="btn" onclick="hideModal('ssh')">Close</button>
     </div>
   </div>

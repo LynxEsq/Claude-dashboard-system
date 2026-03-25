@@ -1111,18 +1111,71 @@ refreshTmuxCount();
 
 // ─── SSH Command Modal (remote access) ──────────
 
+function getSshInfo() {
+  const override = JSON.parse(localStorage.getItem('csm_ssh_override') || '{}');
+  return {
+    user: override.user || State.sshInfo.user,
+    host: override.host || State.sshInfo.host,
+  };
+}
+
+function _updateSshFields() {
+  const override = JSON.parse(localStorage.getItem('csm_ssh_override') || '{}');
+  el('ssh-user').value = override.user || '';
+  el('ssh-host').value = override.host || '';
+  el('ssh-user').placeholder = State.sshInfo.user || 'auto-detected';
+  el('ssh-host').placeholder = State.sshInfo.host || 'auto-detected';
+}
+
+function _rebuildSshCommand() {
+  const pre = el('sshCommand');
+  const tag = pre.dataset.tag; // 'attach:session' or 'dir:/path'
+  if (!tag) return;
+  const { user, host } = getSshInfo();
+  if (tag.startsWith('attach:')) {
+    const sess = tag.slice(7);
+    pre.textContent = `ssh -t ${user}@${host} "tmux attach -t '${sess}'"`;
+  } else if (tag.startsWith('dir:')) {
+    const dir = tag.slice(4);
+    pre.textContent = `ssh -t ${user}@${host} "cd '${dir}' && bash"`;
+  }
+}
+
 function showSshCommand(tmuxSession) {
-  const { user, host } = State.sshInfo;
-  const cmd = `ssh -t ${user}@${host} "tmux attach -t '${tmuxSession}'"`;
-  el('sshCommand').textContent = cmd;
+  el('sshCommand').dataset.tag = 'attach:' + tmuxSession;
+  const { user, host } = getSshInfo();
+  el('sshCommand').textContent = `ssh -t ${user}@${host} "tmux attach -t '${tmuxSession}'"`;
+  _updateSshFields();
   showModal('ssh');
 }
 
 function showSshCommandDir(dirPath) {
-  const { user, host } = State.sshInfo;
-  const cmd = `ssh -t ${user}@${host} "cd '${dirPath}' && bash"`;
-  el('sshCommand').textContent = cmd;
+  el('sshCommand').dataset.tag = 'dir:' + dirPath;
+  const { user, host } = getSshInfo();
+  el('sshCommand').textContent = `ssh -t ${user}@${host} "cd '${dirPath}' && bash"`;
+  _updateSshFields();
   showModal('ssh');
+}
+
+function saveSshOverride() {
+  const user = el('ssh-user').value.trim();
+  const host = el('ssh-host').value.trim();
+  const override = {};
+  if (user) override.user = user;
+  if (host) override.host = host;
+  if (Object.keys(override).length) {
+    localStorage.setItem('csm_ssh_override', JSON.stringify(override));
+  } else {
+    localStorage.removeItem('csm_ssh_override');
+  }
+  _rebuildSshCommand();
+}
+
+function resetSshOverride() {
+  localStorage.removeItem('csm_ssh_override');
+  el('ssh-user').value = '';
+  el('ssh-host').value = '';
+  _rebuildSshCommand();
 }
 
 function copySshCommand() {

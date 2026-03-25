@@ -856,9 +856,14 @@ function getTaskExecStatus(sessionName, taskId) {
     const tmuxSessionName = mapping?.tmux_session_name || null;
     const tmuxAlive = tmuxSessionName ? tmux.sessionExists(tmuxSessionName) : false;
 
-    // For running tasks with a live tmux session, get live output
-    if (task.status === 'running' && tmuxAlive) {
+    // For tasks with a live tmux session, get live output
+    // (covers both 'running' and 'pending' that have an active session mapping)
+    if (tmuxAlive) {
       const paneOutput = tmux.capturePane(tmuxSessionName, null, null) || '';
+      // Fix status if task is pending but tmux is alive (stale state)
+      if (task.status === 'pending' && mapping?.status === 'active') {
+        updateTaskStatus(taskId, 'running', 'Recovered: tmux session alive but task was pending');
+      }
       return {
         status: 'running',
         tmuxSession: tmuxSessionName,

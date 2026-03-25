@@ -1180,11 +1180,38 @@ function resetSshOverride() {
 
 function copySshCommand() {
   const cmd = el('sshCommand').textContent;
-  navigator.clipboard.writeText(cmd).then(() => {
-    const btn = el('sshCopyBtn');
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-  }).catch(() => {});
+  // navigator.clipboard requires HTTPS or localhost — use fallback for HTTP
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(cmd).then(() => _copySshFeedback()).catch(() => _copySshFallback(cmd));
+  } else {
+    _copySshFallback(cmd);
+  }
+}
+
+function _copySshFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    _copySshFeedback();
+  } catch {
+    // Last resort: select text so user can Ctrl+C
+    const pre = el('sshCommand');
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  }
+  document.body.removeChild(ta);
+}
+
+function _copySshFeedback() {
+  const btn = el('sshCopyBtn');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
 }
 
 // ─── Project Info Modal ─────────────────────────

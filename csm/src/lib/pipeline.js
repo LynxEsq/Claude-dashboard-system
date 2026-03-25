@@ -381,6 +381,12 @@ function restoreSessionMappings() {
     WHERE sm.status = 'active'
   `).all();
 
+  // Clean up orphaned wish batch IDs — wishes with batch IDs but no running plan
+  d.prepare(`
+    UPDATE wishes SET planning_batch_id = NULL
+    WHERE processed = 0 AND planning_batch_id IS NOT NULL
+  `).run();
+
   for (const m of activeMappings) {
     const tmuxAlive = tmux.sessionExists(m.tmux_session_name);
 
@@ -388,9 +394,19 @@ function restoreSessionMappings() {
       // tmux session gone — mark mapping as ended
       endSessionMapping(m.task_id);
 
-      // If task is still 'running', mark as completed (session ended externally)
       if (m.task_status === 'running') {
-        updateTaskStatus(m.task_id, 'completed', 'Session ended (tmux session no longer exists after restart)');
+        if (m.task_type === 'plan') {
+          // Plan task died — mark as failed and clean up wish batch IDs
+          updateTaskStatus(m.task_id, 'failed', 'Planning session terminated (tmux session no longer exists after restart)');
+          // Clean up wishes that were in this planning batch
+          const wishes = getDb().prepare(
+            `SELECT id FROM wishes WHERE session_name = ? AND processed = 0 AND planning_batch_id IS NOT NULL`
+          ).all(m.session_name);
+          clearWishesBatchId(wishes.map(w => w.id));
+        } else {
+          // Regular task session ended externally
+          updateTaskStatus(m.task_id, 'completed', 'Session ended (tmux session no longer exists after restart)');
+        }
       }
       continue;
     }
@@ -1130,7 +1146,23 @@ class PipelineError extends Error {
  */
 function planTasks(sessionName) {
   if (activePlans.has(sessionName)) {
-    return { planned: false, reason: 'Planning already in progress', tmuxSession: activePlans.get(sessionName).tmuxSession };
+    const existing = activePlans.get(sessionName);
+    // Check if the old planning session is still alive — if not, clean it up
+    if (!tmux.sessionExists(existing.tmuxSession)) {
+      console.log('[Plan] Stale plan detected (tmux session dead), cleaning up for', sessionName);
+      if (existing.planTaskId) {
+        updateTask(existing.planTaskId, {
+          status: 'failed',
+          result: 'Planning session terminated unexpectedly',
+        });
+        endSessionMapping(existing.planTaskId);
+      }
+      clearWishesBatchId(existing.wishIds);
+      activePlans.delete(sessionName);
+      // Fall through to start a new plan
+    } else {
+      return { planned: false, reason: 'Planning already in progress', tmuxSession: existing.tmuxSession };
+    }
   }
 
   const wishes = getUnprocessedWishes(sessionName);
@@ -1249,14 +1281,50 @@ function getPlanStatus(sessionName) {
   }
 
   const elapsed = Date.now() - plan.startedAt;
+  const PLAN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+  // Check if tmux session is still alive
+  const sessionAlive = tmux.sessionExists(plan.tmuxSession);
 
   // Read output file
   let output = '';
+  let fileExists = false;
   try {
     output = fs.readFileSync(plan.outputFile, 'utf-8');
+    fileExists = true;
   } catch {
-    // File not yet created — still starting
-    return { status: 'running', tmuxSession: plan.tmuxSession, elapsed };
+    // File not yet created
+  }
+
+  // If tmux session is dead and we have no completed output — plan failed
+  if (!sessionAlive && (!fileExists || !output.includes('___CSM_PLAN_DONE___'))) {
+    console.log('[Plan] Tmux session dead, marking plan as failed for', sessionName);
+    if (plan.planTaskId) {
+      updateTask(plan.planTaskId, {
+        status: 'failed',
+        result: 'Planning session terminated unexpectedly' + (output ? '. Partial output: ' + output.substring(output.length - 300) : ''),
+      });
+      endSessionMapping(plan.planTaskId);
+    }
+    clearWishesBatchId(plan.wishIds);
+    activePlans.delete(sessionName);
+    return { status: 'error', wishIds: plan.wishIds, reason: 'Planning session terminated unexpectedly' };
+  }
+
+  // Timeout check
+  if (elapsed > PLAN_TIMEOUT_MS && !output.includes('___CSM_PLAN_DONE___')) {
+    console.log('[Plan] Timed out after', Math.round(elapsed / 1000), 'seconds for', sessionName);
+    tmux.killSession(plan.tmuxSession);
+    if (plan.planTaskId) {
+      updateTask(plan.planTaskId, {
+        status: 'failed',
+        result: 'Planning timed out after ' + Math.round(elapsed / 60000) + ' minutes',
+      });
+      endSessionMapping(plan.planTaskId);
+    }
+    clearWishesBatchId(plan.wishIds);
+    activePlans.delete(sessionName);
+    return { status: 'error', wishIds: plan.wishIds, reason: 'Planning timed out' };
   }
 
   // Not done yet

@@ -36,6 +36,59 @@ function detectPlatform() {
   return _platform;
 }
 
+/**
+ * Check if a graphical display is available (X11/Wayland/xrdp).
+ */
+function hasDisplay() {
+  return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+}
+
+// ─── Linux terminal helpers ─────────────────────────────────
+
+/**
+ * Try to open a Linux terminal emulator running a command.
+ * Returns true if successful.
+ */
+function _openLinuxTerminalExec(cmd) {
+  const terminals = [
+    ['x-terminal-emulator', '-e', cmd],
+    ['gnome-terminal', '--', 'bash', '-c', cmd],
+    ['konsole', '-e', cmd],
+    ['xfce4-terminal', '-e', cmd],
+    ['xterm', '-e', cmd],
+  ];
+  for (const [bin, ...args] of terminals) {
+    try {
+      execSync(`which ${bin}`, { stdio: 'ignore' });
+      execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
+      return true;
+    } catch { /* try next */ }
+  }
+  return false;
+}
+
+/**
+ * Try to open a Linux terminal emulator in a directory.
+ * Returns true if successful.
+ */
+function _openLinuxTerminalDir(safePath) {
+  const terminals = [
+    ['x-terminal-emulator', `--working-directory=${safePath}`],
+    ['gnome-terminal', `--working-directory=${safePath}`],
+    ['konsole', '--workdir', safePath],
+    ['xfce4-terminal', `--working-directory=${safePath}`],
+    ['xterm', '-e', `bash -c "cd '${safePath}' && exec bash"`],
+  ];
+  for (const [bin, ...args] of terminals) {
+    try {
+      execSync(`which ${bin}`, { stdio: 'ignore' });
+      execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
+      return true;
+    } catch { /* try next */ }
+  }
+  return false;
+}
+
 // ─── Terminal openers ───────────────────────────────────────
 
 /**
@@ -45,6 +98,7 @@ function detectPlatform() {
 function openTerminalAttach(tmuxSession) {
   const platform = detectPlatform();
   const safe = tmuxSession.replace(/'/g, "'\\''");
+  const cmd = `tmux attach -t '${safe}'`;
 
   switch (platform) {
     case 'macos': {
@@ -53,8 +107,10 @@ function openTerminalAttach(tmuxSession) {
       break;
     }
     case 'wsl': {
-      // Try Windows Terminal first, fall back to cmd.exe
-      const cmd = `tmux attach -t '${safe}'`;
+      // If DISPLAY is set (xrdp/X11), try Linux terminal emulators first
+      if (hasDisplay() && _openLinuxTerminalExec(cmd)) break;
+
+      // Otherwise try Windows terminals
       try {
         execSync(`cmd.exe /c start wt.exe -w 0 wsl -e bash -ic "${cmd}"`, { timeout: 5000 });
       } catch {
@@ -62,32 +118,15 @@ function openTerminalAttach(tmuxSession) {
           const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
           execSync(`cmd.exe /c start cmd /c wsl -d ${distro} -- tmux attach -t '${safe}'`, { timeout: 5000 });
         } catch {
-          // Last resort: just provide the command (will be caught by caller)
           throw new Error(`Cannot open terminal on WSL. Run manually: tmux attach -t '${safe}'`);
         }
       }
       break;
     }
     case 'linux': {
-      // Try common Linux terminal emulators in order
-      const cmd = `tmux attach -t '${safe}'`;
-      const terminals = [
-        ['x-terminal-emulator', '-e', cmd],
-        ['gnome-terminal', '--', 'bash', '-c', cmd],
-        ['konsole', '-e', cmd],
-        ['xfce4-terminal', '-e', cmd],
-        ['xterm', '-e', cmd],
-      ];
-      let opened = false;
-      for (const [bin, ...args] of terminals) {
-        try {
-          execSync(`which ${bin}`, { stdio: 'ignore' });
-          execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
-          opened = true;
-          break;
-        } catch { /* try next */ }
+      if (!_openLinuxTerminalExec(cmd)) {
+        throw new Error(`No terminal emulator found. Run manually: tmux attach -t '${safe}'`);
       }
-      if (!opened) throw new Error(`No terminal emulator found. Run manually: tmux attach -t '${safe}'`);
       break;
     }
     default:
@@ -111,6 +150,10 @@ function openTerminalInDir(dirPath) {
       break;
     }
     case 'wsl': {
+      // If DISPLAY is set (xrdp/X11), try Linux terminal emulators first
+      if (hasDisplay() && _openLinuxTerminalDir(safePath)) break;
+
+      // Otherwise try Windows terminals
       const cmd = `cd '${safePath}' && exec bash`;
       try {
         execSync(`cmd.exe /c start wt.exe -w 0 wsl -e bash -ic "${cmd}"`, { timeout: 5000 });
@@ -125,23 +168,9 @@ function openTerminalInDir(dirPath) {
       break;
     }
     case 'linux': {
-      const terminals = [
-        ['x-terminal-emulator', `--working-directory=${safePath}`],
-        ['gnome-terminal', `--working-directory=${safePath}`],
-        ['konsole', `--workdir`, safePath],
-        ['xfce4-terminal', `--working-directory=${safePath}`],
-        ['xterm', '-e', `bash -c "cd '${safePath}' && exec bash"`],
-      ];
-      let opened = false;
-      for (const [bin, ...args] of terminals) {
-        try {
-          execSync(`which ${bin}`, { stdio: 'ignore' });
-          execSync(`${bin} ${args.map(a => `'${a}'`).join(' ')} &`, { timeout: 5000, shell: true });
-          opened = true;
-          break;
-        } catch { /* try next */ }
+      if (!_openLinuxTerminalDir(safePath)) {
+        throw new Error(`No terminal emulator found. Run manually: cd '${safePath}'`);
       }
-      if (!opened) throw new Error(`No terminal emulator found. Run manually: cd '${safePath}'`);
       break;
     }
     default:
@@ -156,11 +185,11 @@ function getPlatformInfo() {
   const platform = detectPlatform();
   const labels = {
     macos: { name: 'macOS', terminal: 'Terminal.app' },
-    wsl: { name: 'WSL', terminal: 'Windows Terminal' },
+    wsl: { name: 'WSL', terminal: hasDisplay() ? 'Terminal' : 'Windows Terminal' },
     linux: { name: 'Linux', terminal: 'Terminal' },
     windows: { name: 'Windows', terminal: 'Terminal' },
   };
-  return { platform, ...(labels[platform] || labels.linux) };
+  return { platform, hasDisplay: hasDisplay(), ...(labels[platform] || labels.linux) };
 }
 
-module.exports = { detectPlatform, openTerminalAttach, openTerminalInDir, getPlatformInfo };
+module.exports = { detectPlatform, hasDisplay, openTerminalAttach, openTerminalInDir, getPlatformInfo };

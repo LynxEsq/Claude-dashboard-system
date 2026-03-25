@@ -516,13 +516,17 @@ async function mergeTask(taskId, action) {
 
 async function openWorktreeTerminal(taskId) {
   if (!State.selected) return;
+  const t = State.tasks.find(t => t.id === taskId);
   if (State.isRemote) {
-    const t = State.tasks.find(t => t.id === taskId);
     if (t && t.worktree_path) { showSshCommandDir(t.worktree_path); return; }
   }
   try {
     await API.openWorktreeTerminal(State.selected, taskId);
-  } catch (err) { handleApiError(err, 'openWorktreeTerminal'); }
+  } catch (err) {
+    // Fallback: show directory path in SSH modal
+    if (t && t.worktree_path) { showSshCommandDir(t.worktree_path); }
+    else handleApiError(err, 'openWorktreeTerminal');
+  }
 }
 
 async function runAiReview(taskId) {
@@ -591,31 +595,38 @@ async function restartSelected() {
 async function openTerminal() {
   if (!State.selected) return;
 
-  // Priority: selected task > planning session > project session
+  // Determine which tmux session to open
+  let tmuxTarget = null;
+
   if (State.selectedTask) {
     try {
       const status = await API.taskExecStatus(State.selected, State.selectedTask);
-      if (status.tmuxSession) {
-        if (State.isRemote) { showSshCommand(status.tmuxSession); return; }
-        await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/terminal?tmux=${encodeURIComponent(status.tmuxSession)}`, {
-          method: 'POST'
-        });
-        return;
-      }
+      if (status.tmuxSession) tmuxTarget = status.tmuxSession;
     } catch {}
   }
 
-  if (State.planningSession) {
-    if (State.isRemote) { showSshCommand(State.planningSession); return; }
-    await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/terminal?tmux=${encodeURIComponent(State.planningSession)}`, {
-      method: 'POST'
-    });
-  } else {
-    if (State.isRemote) {
-      const sess = State.sessions[State.selected];
-      if (sess) { showSshCommand(sess.tmuxSession || State.selected); return; }
+  if (!tmuxTarget && State.planningSession) {
+    tmuxTarget = State.planningSession;
+  }
+
+  if (!tmuxTarget) {
+    const sess = State.sessions[State.selected];
+    tmuxTarget = sess?.tmuxSession || State.selected;
+  }
+
+  // Remote → always SSH modal
+  if (State.isRemote) { showSshCommand(tmuxTarget); return; }
+
+  // Local → try native terminal, fallback to SSH modal on error
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/terminal?tmux=${encodeURIComponent(tmuxTarget)}`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      // Terminal open failed — show command to user
+      showSshCommand(data?.tmuxSession || tmuxTarget);
     }
-    await API.openTerminal(State.selected);
+  } catch {
+    showSshCommand(tmuxTarget);
   }
 }
 
@@ -935,7 +946,11 @@ function closeTmuxPanel() {
 async function attachTmux(tmuxName) {
   closeTmuxPanel();
   if (State.isRemote) { showSshCommand(tmuxName); return; }
-  await API.openTmuxSession('_', tmuxName);
+  try {
+    await API.openTmuxSession('_', tmuxName);
+  } catch {
+    showSshCommand(tmuxName);
+  }
 }
 
 async function focusTmuxSession(name) {

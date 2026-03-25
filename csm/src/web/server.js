@@ -260,7 +260,13 @@ function start(port = 9847, autoOpen = true, host) {
       platform.openTerminalAttach(tmuxName);
       res.json({ success: true });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      // Return fallback command so frontend can show it
+      const safe = tmuxName.replace(/'/g, "'\\''");
+      res.status(500).json({
+        error: err.message,
+        fallbackCommand: `tmux attach -t '${safe}'`,
+        tmuxSession: tmuxName,
+      });
     }
   }));
 

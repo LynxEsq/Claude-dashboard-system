@@ -262,6 +262,10 @@
         <label style="font-size:11px;color:var(--text2)">SSH Host / IP</label>
         <input type="text" id="ssh-host" style="font-size:12px" placeholder="auto-detected" onchange="saveSshOverride()">
       </div>
+      <div style="width:80px">
+        <label style="font-size:11px;color:var(--text2)">Port</label>
+        <input type="text" id="ssh-port" style="font-size:12px" placeholder="22" onchange="saveSshOverride()">
+      </div>
     </div>
     <div class="modal-btns">
       <button class="btn sm" onclick="resetSshOverride()" style="margin-right:auto;font-size:11px;opacity:0.7">Reset to auto</button>

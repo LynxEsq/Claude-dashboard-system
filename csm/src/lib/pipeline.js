@@ -610,11 +610,33 @@ function executeNextTask(sessionName) {
 const activeExecs = new Map();
 
 /**
+ * Clean up stale activeExecs entry if tmux session is dead.
+ */
+function _cleanStaleExec(taskId) {
+  const exec = activeExecs.get(taskId);
+  if (!exec) return;
+  if (!tmux.sessionExists(exec.tmuxSession)) {
+    console.log(`[Exec] Cleaning stale exec for task ${taskId}: tmux session "${exec.tmuxSession}" is dead`);
+    activeExecs.delete(taskId);
+    endSessionMapping(taskId);
+    // Reset task to pending if it was running
+    const task = getDb().prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+    if (task && task.status === 'running') {
+      updateTaskStatus(taskId, 'pending', 'Session died, reset to pending for re-execution');
+    }
+  }
+}
+
+/**
  * Execute a task interactively: create a tmux session, start Claude, paste the prompt.
  */
 function executeTaskInteractive(sessionName, taskId) {
   if (activeExecs.has(taskId)) {
-    return { started: false, reason: 'Task already executing', tmuxSession: activeExecs.get(taskId).tmuxSession };
+    _cleanStaleExec(taskId);
+    // Re-check after cleanup
+    if (activeExecs.has(taskId)) {
+      return { started: false, reason: 'Task already executing', tmuxSession: activeExecs.get(taskId).tmuxSession };
+    }
   }
 
   const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
@@ -702,7 +724,10 @@ function executeTaskInteractive(sessionName, taskId) {
  */
 function executeTaskSilent(sessionName, taskId) {
   if (activeExecs.has(taskId)) {
-    return { started: false, reason: 'Task already executing', tmuxSession: activeExecs.get(taskId).tmuxSession };
+    _cleanStaleExec(taskId);
+    if (activeExecs.has(taskId)) {
+      return { started: false, reason: 'Task already executing', tmuxSession: activeExecs.get(taskId).tmuxSession };
+    }
   }
 
   const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);

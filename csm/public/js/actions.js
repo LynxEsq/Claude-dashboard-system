@@ -1131,13 +1131,21 @@ function getSshInfo() {
   return {
     user: override.user || State.sshInfo.user,
     host: override.host || State.sshInfo.host,
+    port: override.port || '',
   };
+}
+
+function _sshPrefix() {
+  const { user, host, port } = getSshInfo();
+  const portFlag = port && port !== '22' ? ` -p ${port}` : '';
+  return `ssh -t${portFlag} ${user}@${host}`;
 }
 
 function _updateSshFields() {
   const override = JSON.parse(localStorage.getItem('csm_ssh_override') || '{}');
   el('ssh-user').value = override.user || '';
   el('ssh-host').value = override.host || '';
+  el('ssh-port').value = override.port || '';
   el('ssh-user').placeholder = State.sshInfo.user || 'auto-detected';
   el('ssh-host').placeholder = State.sshInfo.host || 'auto-detected';
 }
@@ -1146,28 +1154,28 @@ function _rebuildSshCommand() {
   const pre = el('sshCommand');
   const tag = pre.dataset.tag; // 'attach:session' or 'dir:/path'
   if (!tag) return;
-  const { user, host } = getSshInfo();
+  const prefix = _sshPrefix();
   if (tag.startsWith('attach:')) {
     const sess = tag.slice(7);
-    pre.textContent = `ssh -t ${user}@${host} "tmux attach -t '${sess}'"`;
+    pre.textContent = `${prefix} "tmux attach -t '${sess}'"`;
   } else if (tag.startsWith('dir:')) {
     const dir = tag.slice(4);
-    pre.textContent = `ssh -t ${user}@${host} "cd '${dir}' && bash"`;
+    pre.textContent = `${prefix} "cd '${dir}' && bash"`;
   }
 }
 
 function showSshCommand(tmuxSession) {
   el('sshCommand').dataset.tag = 'attach:' + tmuxSession;
-  const { user, host } = getSshInfo();
-  el('sshCommand').textContent = `ssh -t ${user}@${host} "tmux attach -t '${tmuxSession}'"`;
+  const prefix = _sshPrefix();
+  el('sshCommand').textContent = `${prefix} "tmux attach -t '${tmuxSession}'"`;
   _updateSshFields();
   showModal('ssh');
 }
 
 function showSshCommandDir(dirPath) {
   el('sshCommand').dataset.tag = 'dir:' + dirPath;
-  const { user, host } = getSshInfo();
-  el('sshCommand').textContent = `ssh -t ${user}@${host} "cd '${dirPath}' && bash"`;
+  const prefix = _sshPrefix();
+  el('sshCommand').textContent = `${prefix} "cd '${dirPath}' && bash"`;
   _updateSshFields();
   showModal('ssh');
 }
@@ -1175,9 +1183,11 @@ function showSshCommandDir(dirPath) {
 function saveSshOverride() {
   const user = el('ssh-user').value.trim();
   const host = el('ssh-host').value.trim();
+  const port = el('ssh-port').value.trim();
   const override = {};
   if (user) override.user = user;
   if (host) override.host = host;
+  if (port) override.port = port;
   if (Object.keys(override).length) {
     localStorage.setItem('csm_ssh_override', JSON.stringify(override));
   } else {
@@ -1190,6 +1200,7 @@ function resetSshOverride() {
   localStorage.removeItem('csm_ssh_override');
   el('ssh-user').value = '';
   el('ssh-host').value = '';
+  el('ssh-port').value = '';
   _rebuildSshCommand();
 }
 

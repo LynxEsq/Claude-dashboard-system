@@ -194,10 +194,16 @@ async function loadTasks() {
   if (!State.selected) return;
   try {
     State.tasks = await API.getTasks(State.selected);
-    // Extract dependency info from tasks if provided by backend
+    // Extract dependency info from tasks — map backend format to frontend format
     for (const t of State.tasks) {
-      if (t.dependencies && Array.isArray(t.dependencies) && t.dependencies.length > 0) {
-        State.taskDependencies[t.id] = t.dependencies;
+      const deps = t.blocked_by || t.dependencies;
+      if (deps && Array.isArray(deps) && deps.length > 0) {
+        State.taskDependencies[t.id] = deps.map(d => ({
+          blockerTaskId: d.blockerTaskId || d.task_id,
+          blockerTitle: d.blockerTitle || d.title,
+          blockerStatus: d.blockerStatus || d.status,
+          reason: d.reason,
+        }));
       } else {
         delete State.taskDependencies[t.id];
       }

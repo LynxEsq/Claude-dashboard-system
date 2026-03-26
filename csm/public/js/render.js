@@ -411,6 +411,22 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
   `;
 }
 
+function renderNestedTasks(parentId, nestedUnder, hasWishFilter, linkedTaskIds) {
+  if (!nestedUnder[parentId] || nestedUnder[parentId].length === 0) return '';
+  let html = '<div class="task-dep-group">';
+  for (const { task: nt, blockerInfo } of nestedUnder[parentId]) {
+    const nActive = State.selectedTask === nt.id ? 'active' : '';
+    const nLinked = hasWishFilter && linkedTaskIds.includes(nt.id);
+    const nDimmed = hasWishFilter && !nLinked ? 'task-dimmed' : '';
+    const nHighlighted = nLinked ? 'task-wish-linked' : '';
+    html += renderTaskItem(nt, { active: nActive, dimmed: nDimmed, highlighted: nHighlighted, nested: true, blockerInfo });
+    // Recurse: this nested task may also have tasks nested under it
+    html += renderNestedTasks(nt.id, nestedUnder, hasWishFilter, linkedTaskIds);
+  }
+  html += '</div>';
+  return html;
+}
+
 function renderTasks() {
   const list = el('taskList');
   if (State.tasks.length === 0) {
@@ -442,23 +458,25 @@ function renderTasks() {
   const linkedTaskIds = selectedWish ? getLinkedTaskIds(selectedWish) : [];
   const hasWishFilter = linkedTaskIds.length > 0;
 
-  // Build dependency tree: find pending tasks blocked by running tasks
+  // Build dependency tree: nest blocked tasks under their blockers
   const taskById = {};
   for (const t of State.tasks) taskById[t.id] = t;
 
-  // Map: runningTaskId -> [pending tasks blocked by it]
-  const nestedUnder = {};  // blockerTaskId -> [{task, blockerInfo}]
+  // Map: blockerTaskId -> [{task, blockerInfo}]
+  const nestedUnder = {};
   const nestedTaskIds = new Set();
 
   for (const t of sorted) {
     if (t.status !== 'pending' || t.type === 'plan') continue;
     const activeBlockers = getTaskActiveBlockers(t.id);
-    // Find the first running blocker to nest under
-    const runningBlocker = activeBlockers.find(b => b.blockerStatus === 'running' && taskById[b.blockerTaskId]);
-    if (runningBlocker) {
-      const bid = runningBlocker.blockerTaskId;
+    if (activeBlockers.length === 0) continue;
+    // Nest under the first blocker (running preferred, then pending)
+    const blocker = activeBlockers.find(b => b.blockerStatus === 'running' && taskById[b.blockerTaskId])
+      || activeBlockers.find(b => taskById[b.blockerTaskId]);
+    if (blocker) {
+      const bid = blocker.blockerTaskId;
       if (!nestedUnder[bid]) nestedUnder[bid] = [];
-      nestedUnder[bid].push({ task: t, blockerInfo: runningBlocker });
+      nestedUnder[bid].push({ task: t, blockerInfo: blocker });
       nestedTaskIds.add(t.id);
     }
   }
@@ -475,18 +493,8 @@ function renderTasks() {
 
     html += renderTaskItem(t, { active, dimmed, highlighted, nested: false });
 
-    // Render nested blocked tasks under this running task
-    if (nestedUnder[t.id] && nestedUnder[t.id].length > 0) {
-      html += '<div class="task-dep-group">';
-      for (const { task: nt, blockerInfo } of nestedUnder[t.id]) {
-        const nActive = State.selectedTask === nt.id ? 'active' : '';
-        const nLinked = hasWishFilter && linkedTaskIds.includes(nt.id);
-        const nDimmed = hasWishFilter && !nLinked ? 'task-dimmed' : '';
-        const nHighlighted = nLinked ? 'task-wish-linked' : '';
-        html += renderTaskItem(nt, { active: nActive, dimmed: nDimmed, highlighted: nHighlighted, nested: true, blockerInfo });
-      }
-      html += '</div>';
-    }
+    // Render nested blocked tasks (recursive for chains)
+    html += renderNestedTasks(t.id, nestedUnder, hasWishFilter, linkedTaskIds);
   }
 
   list.innerHTML = html;

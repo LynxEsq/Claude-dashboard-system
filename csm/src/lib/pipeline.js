@@ -555,13 +555,17 @@ Convert the NEW wishes into actionable tasks. CRITICAL RULES:
 - Return ALL actions needed: creates, updates, and deletes
 
 ## DEPENDENCY DETECTION — VERY IMPORTANT:
-Analyze whether new tasks depend on (are blocked by) existing running or pending tasks.
+Analyze whether new tasks depend on (are blocked by) other tasks.
 A task is BLOCKED if:
 - It modifies the same files/modules as a running or pending task (conflict risk)
 - It depends on output or changes from another task (sequential dependency)
 - It extends or builds upon functionality being created by another task
 
-For each new task, if it has blockers, include "blocked_by" array with objects specifying the blocker task ID and reason.
+Two ways to specify blockers:
+1. **Existing tasks**: use "task_id" with the [task-ID] number from running/pending tasks above
+2. **Tasks created in this same plan**: use "task_index" — the 0-based position of the blocker task in YOUR "tasks" array
+
+IMPORTANT: For sequential tasks in the same plan, ALWAYS use "task_index" to chain them.
 
 ## Output Format:
 Return a JSON object with this structure:
@@ -579,7 +583,8 @@ Each item in "tasks" array:
   "wish_ids": [4, 5],           // IDs of NEW wishes this addresses
   "priority": 0-10,             // higher = more urgent
   "blocked_by": [               // optional: array of blocker tasks (omit if no dependencies)
-    { "task_id": 12, "reason": "Modifies the same auth module currently being refactored" }
+    { "task_id": 12, "reason": "Depends on running auth refactor" },
+    { "task_index": 0, "reason": "Needs DB models from first task" }
   ]
 }
 
@@ -1572,8 +1577,17 @@ function applyPlan(sessionName, tasksJson, wishIds, planTaskId = null) {
   }
 
   // Save dependencies for newly created tasks
+  // Resolve "task_index" references to real task IDs
   for (const dep of pendingDependencies) {
-    saveTaskDependencies(dep.taskId, dep.blockers);
+    const resolvedBlockers = dep.blockers.map(b => {
+      if (b.task_index != null && b.task_index >= 0 && b.task_index < createdTaskIds.length) {
+        return { task_id: createdTaskIds[b.task_index], reason: b.reason || null };
+      }
+      return b;
+    }).filter(b => b.task_id); // drop unresolved entries
+    if (resolvedBlockers.length > 0) {
+      saveTaskDependencies(dep.taskId, resolvedBlockers);
+    }
   }
 
   // Mark wishes as processed

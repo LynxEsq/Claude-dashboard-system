@@ -101,7 +101,8 @@ function renderProjects() {
     // Task progress bar
     const tc = State.taskCounts[name];
     const allDone = tc && tc.total > 0 && tc.completed === tc.total;
-    const statusDotClass = allDone ? 'all-done' : s.status;
+    const hasRunningTasks = tc && tc.running > 0;
+    const statusDotClass = allDone ? 'all-done' : hasRunningTasks ? 'working' : s.status;
 
     let progressHtml = '';
     if (tc && tc.total > 0) {

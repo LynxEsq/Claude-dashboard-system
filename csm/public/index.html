@@ -301,6 +301,8 @@
   }).catch(() => {});
   API.getSessions().then(d => { State.sessions = d; renderProjects(); loadAllTaskCounts(); }).catch(err => handleApiError(err, 'init'));
   API.getAlerts().then(d => { State.alerts = d; renderAlerts(); }).catch(() => {});
+  // Periodically refresh task counts to catch status changes from other sources
+  setInterval(loadAllTaskCounts, 30000);
 
   // Modal close on backdrop / Esc
   document.querySelectorAll('.modal-overlay').forEach(m => {

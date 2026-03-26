@@ -286,13 +286,20 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
   if (isPlan) {
     const expanded = State.selectedTask === t.id;
     const resultText = t.result || '';
+    let statusInfo = '';
+    if (t.status === 'running') {
+      const elapsed = t.started_at ? Math.round((Date.now() - new Date(t.started_at + (t.started_at.includes('Z') ? '' : 'Z')).getTime()) / 1000) : 0;
+      const stageText = elapsed < 5 ? 'Starting planning session...'
+        : elapsed < 15 ? 'Launching Claude AI planner...'
+        : elapsed < 30 ? 'AI is reading wishes and existing tasks...'
+        : 'AI is analyzing and generating tasks...';
+      statusInfo = `<div class="task-plan-result" style="color:var(--text2);font-style:italic">${stageText} (${elapsed}s)</div>`;
+    }
     const resultHtml = resultText
       ? (expanded
         ? `<div class="task-plan-result expanded markdown-body">${md(resultText)}</div>`
         : `<div class="task-plan-result">${esc(resultText).substring(0, 150)}${resultText.length > 150 ? '...' : ''}</div>`)
-      : (t.status === 'running'
-        ? `<div class="task-plan-result" style="color:var(--text2);font-style:italic">AI is analyzing wishes...</div>`
-        : '');
+      : statusInfo;
 
     return `
       <div class="task-item task-plan ${active} ${dimmed} ${highlighted}" onclick="selectTask(${t.id})">

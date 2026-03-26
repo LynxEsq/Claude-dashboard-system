@@ -50,9 +50,13 @@ function connectWS() {
       case 'planStarted':
         State.planningProjects.add(msg.data.sessionName);
         // Track which wishes are being planned
-        if (msg.data.wishIds && msg.data.sessionName === State.selected) {
-          State.planningWishIds = new Set(msg.data.wishIds);
-          renderWishes();
+        if (msg.data.sessionName === State.selected) {
+          if (msg.data.wishIds) {
+            State.planningWishIds = new Set(msg.data.wishIds);
+            renderWishes();
+          }
+          // Immediately load tasks so plan card appears
+          loadTasks();
         }
         renderProjects();
         break;

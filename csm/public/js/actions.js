@@ -377,6 +377,9 @@ async function planFromWishes() {
     renderProjects();
     el('planBtn').innerHTML = 'Planning... <span style="font-size:9px;opacity:0.7">click Terminal to watch</span>';
 
+    // Immediately load tasks so the plan card appears
+    loadTasks();
+
     // Poll for completion
     pollPlanStatus();
   } catch (err) {
@@ -395,6 +398,8 @@ async function pollPlanStatus() {
     if (status.status === 'running') {
       const secs = Math.round((status.elapsed || 0) / 1000);
       el('planBtn').textContent = `Planning... ${secs}s`;
+      // Refresh task list to update plan card status
+      loadTasks();
       setTimeout(pollPlanStatus, 2000);
       return;
     }

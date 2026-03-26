@@ -164,12 +164,14 @@ function renderWishItem(w) {
 
   const tasksBadge = w.processed && taskIds.length > 0
     ? `<span class="wish-tasks-badge${isSelected ? ' active' : ''}" onclick="event.stopPropagation(); selectWish(${w.id})">${taskIds.length} task${taskIds.length !== 1 ? 's' : ''}</span>`
+    : w.processed
+    ? `<span class="wish-tasks-badge" style="opacity:0.5" onclick="event.stopPropagation(); selectWish(${w.id})">plan</span>`
     : '';
 
   const statusLabel = w.processed ? 'processed' : isPlanning ? '<span class="wish-planning-badge">Planning...</span>' : 'new';
 
   return `
-    <div class="${cls}"${w.processed && taskIds.length > 0 ? ` onclick="selectWish(${w.id})"` : ''}>
+    <div class="${cls}"${w.processed ? ` onclick="selectWish(${w.id})"` : ''}>
       <div class="wish-content markdown-body">${md(w.content)}</div>
       <div class="wish-meta">
         <span>${time} · ${statusLabel} ${tasksBadge}</span>

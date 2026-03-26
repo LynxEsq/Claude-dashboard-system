@@ -167,7 +167,17 @@ function safeParseIds(str) {
 }
 
 function getLinkedTaskIds(wish) {
-  return safeParseIds(wish?.task_ids);
+  const direct = safeParseIds(wish?.task_ids);
+  // Also find plan tasks that reference this wish (via wish_ids field on tasks)
+  if (wish?.id && State.tasks) {
+    for (const t of State.tasks) {
+      const wids = safeParseIds(t.wish_ids);
+      if (wids.includes(wish.id) && !direct.includes(t.id)) {
+        direct.push(t.id);
+      }
+    }
+  }
+  return direct;
 }
 
 function getLinkedWishIds(task) {

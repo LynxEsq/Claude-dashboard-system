@@ -87,7 +87,7 @@ function buildTarget(session, window, pane) {
 /**
  * Create a new tmux session and optionally start claude in it.
  */
-function createSession(tmuxSession, workDir, startClaude = true) {
+function createSession(tmuxSession, workDir, startClaude = true, claudeArgs = '') {
   try {
     if (sessionExists(tmuxSession)) {
       return { success: false, error: 'Session already exists' };
@@ -95,7 +95,8 @@ function createSession(tmuxSession, workDir, startClaude = true) {
     const cdArg = workDir ? `-c "${workDir}"` : '';
     execSync(`tmux new-session -d -s "${tmuxSession}" -x 200 -y 50 ${cdArg}`, { timeout: 5000 });
     if (startClaude) {
-      execSync(`tmux send-keys -t "${tmuxSession}" "claude" Enter`, { timeout: 5000 });
+      const cmd = claudeArgs ? `claude ${claudeArgs}` : 'claude';
+      execSync(`tmux send-keys -t "${tmuxSession}" "${cmd}" Enter`, { timeout: 5000 });
     }
     return { success: true };
   } catch (err) {

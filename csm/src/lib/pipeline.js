@@ -610,6 +610,20 @@ function executeNextTask(sessionName) {
 const activeExecs = new Map();
 
 /**
+ * Read allowed permissions from project's .claude/settings.local.json
+ */
+function _getProjectPermissions(projectPath) {
+  if (!projectPath) return [];
+  const settingsPath = path.join(projectPath, '.claude', 'settings.local.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    return data?.permissions?.allow || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Build task prompt with context from completed tasks in the same session.
  * Appends summaries of recently completed tasks so Claude has continuity.
  */
@@ -697,8 +711,15 @@ function executeTaskInteractive(sessionName, taskId) {
   const safeName = tmux.safeTmuxName(sessionName);
   const execTmux = `csm-task-${safeName}-${taskId}`;
 
+  // Build claude args with project permissions
+  const perms = _getProjectPermissions(projectPath);
+  let claudeArgs = '';
+  if (perms.length > 0) {
+    claudeArgs = '--allowedTools ' + perms.map(p => `"${p}"`).join(' ');
+  }
+
   tmux.killSession(execTmux);
-  const result = tmux.createSession(execTmux, cwd, true); // startClaude = true
+  const result = tmux.createSession(execTmux, cwd, true, claudeArgs);
   if (!result.success) {
     // Clean up worktree on failure
     if (worktreePath) {

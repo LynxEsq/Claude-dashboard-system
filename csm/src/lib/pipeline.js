@@ -404,8 +404,12 @@ function restoreSessionMappings() {
           ).all(m.session_name);
           clearWishesBatchId(wishes.map(w => w.id));
         } else {
-          // Regular task session ended externally
-          updateTaskStatus(m.task_id, 'completed', 'Session ended (tmux session no longer exists after restart)');
+          // Regular task session ended externally — use saved output if available
+          const savedOutput = _getLastOutput(m.task_id);
+          const summary = savedOutput
+            ? savedOutput.substring(savedOutput.length - 3000)
+            : 'Session ended (tmux session no longer exists after restart)';
+          updateTaskStatus(m.task_id, 'completed', summary);
         }
       }
       continue;
@@ -613,6 +617,50 @@ function executeNextTask(sessionName) {
 
 // Track active task executions (both interactive and silent): taskId -> { tmuxSession, outputFile, sessionName, mode }
 const activeExecs = new Map();
+
+// In-memory cache of last terminal output per task (saved to DB periodically)
+const _lastOutputCache = new Map();
+let _lastOutputFlushTimer = null;
+
+/**
+ * Save last terminal output snapshot for a task (throttled DB writes).
+ */
+function _saveLastOutput(taskId, output) {
+  if (!output) return;
+  const clean = cleanAnsi(output);
+  // Keep last 3000 chars
+  _lastOutputCache.set(taskId, clean.substring(clean.length - 3000));
+
+  // Flush to DB every 10 seconds (not every poll)
+  if (!_lastOutputFlushTimer) {
+    _lastOutputFlushTimer = setTimeout(() => {
+      _flushLastOutputs();
+      _lastOutputFlushTimer = null;
+    }, 10000);
+  }
+}
+
+function _flushLastOutputs() {
+  const stmt = getDb().prepare(
+    'UPDATE execution_log SET output_summary = ? WHERE task_id = ? AND status IS NULL'
+  );
+  for (const [taskId, output] of _lastOutputCache) {
+    try { stmt.run(output, taskId); } catch {}
+  }
+}
+
+/**
+ * Get last saved output for a task.
+ */
+function _getLastOutput(taskId) {
+  // Check in-memory first
+  if (_lastOutputCache.has(taskId)) return _lastOutputCache.get(taskId);
+  // Fall back to DB
+  const row = getDb().prepare(
+    'SELECT output_summary FROM execution_log WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+  ).get(taskId);
+  return row?.output_summary || null;
+}
 
 /**
  * Read allowed permissions from project's .claude/settings.local.json
@@ -918,6 +966,8 @@ function getTaskExecStatus(sessionName, taskId) {
       if (task.status === 'pending' && mapping?.status === 'active') {
         updateTaskStatus(taskId, 'running', 'Recovered: tmux session alive but task was pending');
       }
+      // Persist last output snapshot so it survives session death
+      _saveLastOutput(taskId, paneOutput);
       return {
         status: 'running',
         tmuxSession: tmuxSessionName,
@@ -953,7 +1003,13 @@ function getTaskExecStatus(sessionName, taskId) {
   // Check if tmux session still exists
   if (!tmux.sessionExists(exec.tmuxSession)) {
     endSessionMapping(taskId);
-    updateTaskStatus(taskId, 'completed', 'Session ended (tmux session disappeared)');
+    // Use saved output snapshot if available
+    const savedOutput = _getLastOutput(taskId);
+    const summary = savedOutput
+      ? savedOutput.substring(savedOutput.length - 3000)
+      : 'Session ended (tmux session disappeared, no output captured)';
+    updateTaskStatus(taskId, 'completed', summary);
+    if (exec.execId) completeExecution(exec.execId, 'completed', summary);
     activeExecs.delete(taskId);
 
     // Attempt merge if task had a worktree
@@ -968,6 +1024,8 @@ function getTaskExecStatus(sessionName, taskId) {
   // Interactive mode — show live pane; detect if Claude has finished (prompt visible)
   if (exec.mode === 'interactive') {
     const paneOutput = tmux.capturePane(exec.tmuxSession, null, null) || '';
+    // Persist last output snapshot
+    _saveLastOutput(taskId, paneOutput);
 
     // Check if Claude returned to prompt (task likely finished)
     // Look for prompt chars on the last 3 lines (strip ANSI for reliable regex matching)
@@ -1018,6 +1076,8 @@ function getTaskExecStatus(sessionName, taskId) {
 
   if (!output.includes('___CSM_EXEC_DONE___')) {
     const paneOutput = tmux.capturePane(exec.tmuxSession, null, null);
+    // Persist last output snapshot for silent mode too
+    if (output) _saveLastOutput(taskId, output);
     return {
       status: 'running',
       tmuxSession: exec.tmuxSession,

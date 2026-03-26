@@ -477,6 +477,27 @@ async function runTaskSilent(taskId) {
   } catch (err) { handleApiError(err, 'runTaskSilent'); }
 }
 
+async function runTaskInteractiveNoWt(taskId) {
+  if (!State.selected) return;
+  try {
+    const result = await API.executeInteractive(State.selected, taskId, { noWorktree: true });
+    if (!result.started) { showToast(result.reason || 'Failed', 'warning'); return; }
+    if (result.mode) State.taskModes[result.taskId] = result.mode;
+    loadTasks();
+  } catch (err) { handleApiError(err, 'runTaskInteractiveNoWt'); }
+}
+
+async function runTaskSilentNoWt(taskId) {
+  if (!State.selected) return;
+  try {
+    const result = await API.executeSilent(State.selected, taskId, { noWorktree: true });
+    if (!result.started) { showToast(result.reason || 'Failed', 'warning'); return; }
+    if (result.mode) State.taskModes[result.taskId] = result.mode;
+    loadTasks();
+    pollTaskExec(taskId, result.tmuxSession);
+  } catch (err) { handleApiError(err, 'runTaskSilentNoWt'); }
+}
+
 async function pollTaskExec(taskId, tmuxSession) {
   if (!State.selected) return;
   try {

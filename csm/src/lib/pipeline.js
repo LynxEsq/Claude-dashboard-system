@@ -677,7 +677,7 @@ function _cleanStaleExec(taskId) {
 /**
  * Execute a task interactively: create a tmux session, start Claude, paste the prompt.
  */
-function executeTaskInteractive(sessionName, taskId) {
+function executeTaskInteractive(sessionName, taskId, opts = {}) {
   if (activeExecs.has(taskId)) {
     _cleanStaleExec(taskId);
     // Re-check after cleanup
@@ -696,9 +696,9 @@ function executeTaskInteractive(sessionName, taskId) {
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
 
-  // Try to create a git worktree for task isolation
+  // Try to create a git worktree for task isolation (unless noWorktree)
   let worktreePath = null;
-  if (projectPath && fs.existsSync(projectPath)) {
+  if (!opts.noWorktree && projectPath && fs.existsSync(projectPath)) {
     try {
       const wt = worktree.createWorktree(projectPath, taskId);
       if (wt) {
@@ -776,7 +776,7 @@ function executeTaskInteractive(sessionName, taskId) {
 /**
  * Execute a specific task silently with --print in a visible tmux session.
  */
-function executeTaskSilent(sessionName, taskId) {
+function executeTaskSilent(sessionName, taskId, opts = {}) {
   if (activeExecs.has(taskId)) {
     _cleanStaleExec(taskId);
     if (activeExecs.has(taskId)) {
@@ -794,9 +794,9 @@ function executeTaskSilent(sessionName, taskId) {
   let cwd = os.homedir();
   if (projectPath && fs.existsSync(projectPath)) cwd = projectPath;
 
-  // Try to create a git worktree for task isolation
+  // Try to create a git worktree for task isolation (unless noWorktree)
   let worktreePath = null;
-  if (projectPath && fs.existsSync(projectPath)) {
+  if (!opts.noWorktree && projectPath && fs.existsSync(projectPath)) {
     try {
       const wt = worktree.createWorktree(projectPath, taskId);
       if (wt) {

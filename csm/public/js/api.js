@@ -92,12 +92,12 @@ const API = {
   applyPlan: (name, data) => apiFetch(`/api/pipeline/${name}/apply-plan`, {
     method: 'POST', headers: CT, body: JSON.stringify(data)
   }),
-  executeInteractive: (name, taskId) => apiFetch(`/api/pipeline/${name}/execute-interactive`, {
-    method: 'POST', headers: CT, body: JSON.stringify({ taskId })
+  executeInteractive: (name, taskId, opts) => apiFetch(`/api/pipeline/${name}/execute-interactive`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ taskId, ...opts })
   }),
   executeNext: (name) => apiFetch(`/api/pipeline/${name}/execute`, { method: 'POST' }),
-  executeSilent: (name, taskId) => apiFetch(`/api/pipeline/${name}/execute-silent`, {
-    method: 'POST', headers: CT, body: JSON.stringify({ taskId })
+  executeSilent: (name, taskId, opts) => apiFetch(`/api/pipeline/${name}/execute-silent`, {
+    method: 'POST', headers: CT, body: JSON.stringify({ taskId, ...opts })
   }),
   taskExecStatus: (name, taskId) => apiFetch(`/api/pipeline/${name}/task-status/${taskId}`),
 

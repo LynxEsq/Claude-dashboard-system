@@ -526,8 +526,8 @@ function start(port = 9847, autoOpen = true, host) {
 
   // Interactive execution: run task in its own Claude session
   app.post('/api/pipeline/:name/execute-interactive', safe((req, res) => {
-    const { taskId } = req.body;
-    const result = pipeline.executeTaskInteractive(req.params.name, taskId);
+    const { taskId, noWorktree } = req.body;
+    const result = pipeline.executeTaskInteractive(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
     }
@@ -536,8 +536,8 @@ function start(port = 9847, autoOpen = true, host) {
 
   // Silent execution: run task with --print in a tmux session
   app.post('/api/pipeline/:name/execute-silent', safe((req, res) => {
-    const { taskId } = req.body;
-    const result = pipeline.executeTaskSilent(req.params.name, taskId);
+    const { taskId, noWorktree } = req.body;
+    const result = pipeline.executeTaskSilent(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
     }

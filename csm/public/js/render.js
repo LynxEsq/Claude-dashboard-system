@@ -100,9 +100,13 @@ function renderProjects() {
 
     // Task progress bar
     const tc = State.taskCounts[name];
-    const allDone = tc && tc.total > 0 && tc.completed === tc.total;
     const hasRunningTasks = tc && tc.running > 0;
-    const statusDotClass = allDone ? 'all-done' : hasRunningTasks ? 'working' : s.status;
+    const hasPendingWork = tc && (tc.pending > 0 || tc.running > 0 || (tc.merge_pending || 0) > 0);
+    const allDone = tc && tc.total > 0 && tc.completed === tc.total;
+    // Green if tasks running, blue only if all done AND there was recent active work, otherwise session status
+    const statusDotClass = hasRunningTasks ? 'working'
+      : hasPendingWork ? s.status
+      : s.status;  // all-done no longer overrides — use tmux session status
 
     let progressHtml = '';
     if (tc && tc.total > 0) {
@@ -394,8 +398,9 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
       </div>
       <div class="task-toolbar">
         <div class="task-toolbar-left">
-          ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" onclick="event.stopPropagation(); runTaskInteractive(${t.id})" title="${hasBlockers ? 'Blocked — blocker still running' : 'Run in Claude session'}">Run</button>` : ''}
-          ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" style="opacity:0.7" onclick="event.stopPropagation(); runTaskSilent(${t.id})" title="${hasBlockers ? 'Blocked — blocker still running' : 'Run with --print (silent)'}">Silent</button>` : ''}
+          ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" onclick="event.stopPropagation(); runTaskInteractive(${t.id})" title="${hasBlockers ? 'Blocked' : 'Run in Claude session (with worktree)'}">Run</button>` : ''}
+          ${t.status === 'pending' ? `<button class="btn sm green${hasBlockers ? ' btn-blocked' : ''}" style="opacity:0.7" onclick="event.stopPropagation(); runTaskSilent(${t.id})" title="${hasBlockers ? 'Blocked' : 'Silent mode (with worktree)'}">Silent</button>` : ''}
+          ${t.status === 'pending' ? `<button class="btn sm${hasBlockers ? ' btn-blocked' : ''}" style="opacity:0.6" onclick="event.stopPropagation(); runTaskInteractiveNoWt(${t.id})" title="${hasBlockers ? 'Blocked' : 'Run directly in project dir (no worktree)'}">Run*</button>` : ''}
           ${hasWorktree && expanded ? `<button class="btn sm" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open worktree in ${State.platform.terminal}">Terminal</button>` : ''}
           ${hasWorktree && expanded && (t.status === 'completed' || t.status === 'merge_pending') ? `<button class="btn sm" onclick="event.stopPropagation(); runAiReview(${t.id})" title="Run AI code review">Review</button>` : ''}
         </div>

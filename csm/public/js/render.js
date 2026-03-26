@@ -400,6 +400,7 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
           ${hasWorktree && expanded && (t.status === 'completed' || t.status === 'merge_pending') ? `<button class="btn sm" onclick="event.stopPropagation(); runAiReview(${t.id})" title="Run AI code review">Review</button>` : ''}
         </div>
         <div class="task-toolbar-right">
+          <button class="btn sm" onclick="event.stopPropagation(); copyTaskText(${t.id})" title="Copy task description">Copy</button>
           ${t.status === 'pending' || t.status === 'running' ? `<button class="btn sm" style="color:var(--green);border-color:var(--green)" onclick="event.stopPropagation(); completeTask(${t.id})" title="Mark as done">Done</button>` : ''}
           ${t.status === 'completed' ? `<button class="btn sm" onclick="event.stopPropagation(); reopenTask(${t.id})" title="Reopen task">Reopen</button>` : ''}
           ${t.status === 'pending' ? `<button class="btn sm" onclick="event.stopPropagation(); editTask(${t.id})">Edit</button>` : ''}

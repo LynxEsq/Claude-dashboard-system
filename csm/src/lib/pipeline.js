@@ -610,6 +610,34 @@ function executeNextTask(sessionName) {
 const activeExecs = new Map();
 
 /**
+ * Build task prompt with context from completed tasks in the same session.
+ * Appends summaries of recently completed tasks so Claude has continuity.
+ */
+function _buildTaskPrompt(task) {
+  let prompt = task.description;
+
+  // Get recently completed tasks from the same session (last 5, excluding current)
+  const completedTasks = getDb().prepare(`
+    SELECT title, result, execution_log
+    FROM tasks
+    WHERE session_name = ? AND status = 'completed' AND id != ?
+    ORDER BY completed_at DESC LIMIT 5
+  `).all(task.session_name, task.id);
+
+  if (completedTasks.length > 0) {
+    prompt += '\n\n---\n\n## Context: recently completed tasks in this project\n\n';
+    for (const ct of completedTasks) {
+      const summary = ct.result || ct.execution_log || '(no summary)';
+      // Trim to avoid huge prompts
+      const trimmed = summary.length > 500 ? summary.substring(0, 500) + '...' : summary;
+      prompt += `### ${ct.title}\n${trimmed}\n\n`;
+    }
+  }
+
+  return prompt;
+}
+
+/**
  * Clean up stale activeExecs entry if tmux session is dead.
  */
 function _cleanStaleExec(taskId) {
@@ -679,9 +707,9 @@ function executeTaskInteractive(sessionName, taskId) {
     return { started: false, reason: 'Cannot create session: ' + result.error };
   }
 
-  // Write prompt to file for reliable paste
+  // Write prompt to file for reliable paste (includes completed task context)
   const promptFile = path.join(os.tmpdir(), `csm-task-prompt-${safeName}-${taskId}.txt`);
-  fs.writeFileSync(promptFile, task.description);
+  fs.writeFileSync(promptFile, _buildTaskPrompt(task));
 
   // Wait for Claude to start, then paste prompt
   setTimeout(() => {
@@ -761,7 +789,7 @@ function executeTaskSilent(sessionName, taskId) {
   const outputFile = path.join(os.tmpdir(), `csm-exec-output-${safeName}-${taskId}-${ts}.txt`);
   const scriptFile = path.join(os.tmpdir(), `csm-exec-run-${safeName}-${taskId}-${ts}.sh`);
 
-  fs.writeFileSync(promptFile, task.description);
+  fs.writeFileSync(promptFile, _buildTaskPrompt(task));
 
   // Verify claude CLI is available before creating sessions
   const claudeBin = findClaudeBin();

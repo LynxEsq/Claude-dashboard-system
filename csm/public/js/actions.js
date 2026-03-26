@@ -541,6 +541,28 @@ async function runAiReview(taskId) {
   } catch (err) { handleApiError(err, 'runAiReview'); }
 }
 
+function copyTaskText(taskId) {
+  const t = State.tasks.find(t => t.id === taskId);
+  if (!t) return;
+  const text = `${t.title}\n\n${t.description || ''}`.trim();
+  // Reuse the same clipboard fallback logic
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => showToast('Copied', 'info')).catch(() => _copyFallback(text));
+  } else {
+    _copyFallback(text);
+  }
+}
+
+function _copyFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); showToast('Copied', 'info'); } catch {}
+  document.body.removeChild(ta);
+}
+
 async function loadTaskDiff(taskId) {
   if (!State.selected || State.taskDiffs[taskId]) return;
   try {

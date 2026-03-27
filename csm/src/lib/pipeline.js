@@ -662,6 +662,40 @@ function _getLastOutput(taskId) {
   return row?.output_summary || null;
 }
 
+// ─── Output File Storage ────────────────────────────────
+const OUTPUTS_DIR = path.join(os.homedir(), '.csm', 'outputs');
+
+function _saveOutputFile(taskId, output) {
+  if (!output) return;
+  try {
+    if (!fs.existsSync(OUTPUTS_DIR)) fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(OUTPUTS_DIR, `task-${taskId}.txt`), output, 'utf-8');
+  } catch {}
+}
+
+function _readOutputFile(taskId) {
+  try {
+    return fs.readFileSync(path.join(OUTPUTS_DIR, `task-${taskId}.txt`), 'utf-8');
+  } catch { return null; }
+}
+
+/**
+ * Get full output for a completed task: file → execution_log table → tasks table.
+ */
+function getTaskFullOutput(taskId) {
+  // 1. Try file
+  const fileOutput = _readOutputFile(taskId);
+  if (fileOutput) return fileOutput;
+  // 2. Try execution_log table
+  const execRow = getDb().prepare(
+    'SELECT output_summary FROM execution_log WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+  ).get(taskId);
+  if (execRow?.output_summary) return execRow.output_summary;
+  // 3. Fall back to tasks.execution_log
+  const task = getDb().prepare('SELECT execution_log, result FROM tasks WHERE id = ?').get(taskId);
+  return task?.execution_log || task?.result || null;
+}
+
 /**
  * Read allowed permissions from project's .claude/settings.local.json
  */
@@ -1004,11 +1038,10 @@ function getTaskExecStatus(sessionName, taskId) {
   if (!tmux.sessionExists(exec.tmuxSession)) {
     endSessionMapping(taskId);
     // Use saved output snapshot if available
-    const savedOutput = _getLastOutput(taskId);
-    const summary = savedOutput
-      ? savedOutput.substring(savedOutput.length - 3000)
-      : 'Session ended (tmux session disappeared, no output captured)';
-    updateTaskStatus(taskId, 'completed', summary);
+    const savedOutput = _getLastOutput(taskId) || _readOutputFile(taskId);
+    const summary = savedOutput || 'Session ended (tmux session disappeared, no output captured)';
+    if (savedOutput) _saveOutputFile(taskId, savedOutput);
+    updateTaskStatus(taskId, 'completed', summary.substring(0, 2000));
     if (exec.execId) completeExecution(exec.execId, 'completed', summary);
     activeExecs.delete(taskId);
 
@@ -1089,8 +1122,12 @@ function getTaskExecStatus(sessionName, taskId) {
 
   // Silent done
   const cleanOutput = cleanAnsi(output.replace('___CSM_EXEC_DONE___', ''));
+  // Save full output to file for large outputs
+  _saveOutputFile(taskId, cleanOutput);
+  // Save to DB (full output in execution_log, truncated summary in tasks)
+  _saveLastOutput(taskId, cleanOutput);
   updateTaskStatus(taskId, 'completed', cleanOutput.substring(0, 2000));
-  if (exec.execId) completeExecution(exec.execId, 'completed', cleanOutput.substring(0, 2000));
+  if (exec.execId) completeExecution(exec.execId, 'completed', cleanOutput);
   endSessionMapping(taskId);
   tmux.killSession(exec.tmuxSession);
   activeExecs.delete(taskId);
@@ -1744,6 +1781,7 @@ module.exports = {
   executeTaskInteractive,
   executeTaskSilent,
   getTaskExecStatus,
+  getTaskFullOutput,
   applyPlan,
   saveTaskDependencies,
   getTaskDependencies,

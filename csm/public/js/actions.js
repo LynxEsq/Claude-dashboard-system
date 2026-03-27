@@ -98,6 +98,17 @@ function selectTask(id) {
 async function fetchTaskTerminal(taskId) {
   if (State.selectedTask !== taskId || !State.selected) return;
   try {
+    // For completed/failed tasks, fetch full output via dedicated endpoint
+    const task = State.tasks.find(t => t.id === taskId);
+    if (task && (task.status === 'completed' || task.status === 'failed')) {
+      const data = await API.taskFullOutput(State.selected, taskId);
+      if (State.selectedTask !== taskId) return;
+      if (data.output) {
+        setTermContent(data.output, false);
+        return;
+      }
+    }
+
     const status = await API.taskExecStatus(State.selected, taskId);
     if (State.selectedTask !== taskId) return;
 
@@ -105,13 +116,6 @@ async function fetchTaskTerminal(taskId) {
       setTermContent(status.preview, true);
     } else if (status.lastOutput) {
       setTermContent(status.lastOutput, false);
-    }
-    // If tmux session ended, show that info
-    if (status.tmuxSession && status.tmuxAlive === false) {
-      const existing = el('termBody').textContent;
-      if (!existing || existing === '(no output)') {
-        setTermContent(`Session ended: ${status.tmuxSession}\n\n${status.lastOutput || 'No output saved.'}`, false);
-      }
     }
   } catch {}
 }

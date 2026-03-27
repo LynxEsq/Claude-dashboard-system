@@ -355,6 +355,15 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
 
   const hasBlockers = isBlocked && t.status === 'pending';
 
+  // Result preview for completed/failed tasks
+  const execLog = t.execution_log || '';
+  const hasOutput = execLog.length > 0 && (t.status === 'completed' || t.status === 'failed');
+  const resultPreviewHtml = hasOutput
+    ? (expanded
+      ? ''  // Full output shown in terminal pane when expanded
+      : `<div class="task-result-preview">${esc(execLog.substring(execLog.length - 200).trim())}${execLog.length > 200 ? '...' : ''}</div>`)
+    : '';
+
   // Worktree path (shown under description when expanded)
   const wtPathHtml = expanded && hasWorktree
     ? `<div class="task-wt-path" onclick="event.stopPropagation(); openWorktreeTerminal(${t.id})" title="Open in ${State.platform.terminal}">${esc(t.worktree_path)}</div>`
@@ -394,6 +403,7 @@ function renderTaskItem(t, { active, dimmed, highlighted, nested, blockerInfo })
       </div>
       ${blockerLabel}
       ${descHtml}
+      ${resultPreviewHtml}
       ${wtPathHtml}
       ${diffHtml}
       ${mergeSection}
@@ -549,8 +559,10 @@ function renderTerminal() {
         if (isPlan) {
           const content = t.result || t.description || '(no planning output)';
           setTermContent(content, false);
-        } else if (t.tmux_status === 'ended' || (t.tmux_session_name && t.tmux_status !== 'active')) {
-          setTermContent(t.execution_log || t.result || `Session ended: ${t.tmux_session_name || 'unknown'}\n\n${t.description || '(no output saved)'}`, false);
+        } else if (t.status === 'completed' || t.status === 'failed') {
+          // For completed/failed tasks, show execution_log; fetchTaskTerminal will replace with full output
+          const content = t.execution_log || t.result || t.description || (t.status === 'completed' ? 'Task completed.' : 'Task failed.');
+          setTermContent(content, false);
         } else {
           const content = t.execution_log || t.result || t.description || '(no output)';
           setTermContent(content, false);

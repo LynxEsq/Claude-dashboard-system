@@ -100,6 +100,7 @@ const API = {
     method: 'POST', headers: CT, body: JSON.stringify({ taskId, ...opts })
   }),
   taskExecStatus: (name, taskId) => apiFetch(`/api/pipeline/${name}/task-status/${taskId}`),
+  taskFullOutput: (name, taskId) => apiFetch(`/api/pipeline/${name}/task-output/${taskId}`),
 
   // ─── Worktree / Merge ─────────────────────────
   mergeTask: (name, taskId, action) => apiFetch(`/api/pipeline/${name}/tasks/${taskId}/merge`, {

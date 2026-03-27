@@ -550,6 +550,12 @@ function start(port = 9847, autoOpen = true, host) {
     res.json(result);
   }));
 
+  // Get full task output (for completed tasks)
+  app.get('/api/pipeline/:name/task-output/:taskId', safe((req, res) => {
+    const output = pipeline.getTaskFullOutput(parseInt(req.params.taskId));
+    res.json({ output });
+  }));
+
   app.post('/api/pipeline/:name/execute', safe((req, res) => {
     const result = pipeline.executeNextTask(req.params.name);
     if (result.started) {

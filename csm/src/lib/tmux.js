@@ -96,7 +96,15 @@ function createSession(tmuxSession, workDir, startClaude = true, claudeArgs = ''
     execSync(`tmux new-session -d -s "${tmuxSession}" -x 200 -y 50 ${cdArg}`, { timeout: 5000 });
     if (startClaude) {
       const cmd = claudeArgs ? `claude ${claudeArgs}` : 'claude';
-      execSync(`tmux send-keys -t "${tmuxSession}" "${cmd}" Enter`, { timeout: 5000 });
+      // Use temp file + paste buffer to avoid shell interpretation of special chars (parentheses etc)
+      const fs = require('fs');
+      const os = require('os');
+      const tmpFile = require('path').join(os.tmpdir(), `csm-claude-cmd-${Date.now()}.txt`);
+      fs.writeFileSync(tmpFile, cmd);
+      execSync(`tmux load-buffer "${tmpFile}"`, { timeout: 5000 });
+      execSync(`tmux paste-buffer -t "${tmuxSession}"`, { timeout: 5000 });
+      execSync(`tmux send-keys -t "${tmuxSession}" Enter`, { timeout: 5000 });
+      try { fs.unlinkSync(tmpFile); } catch {}
     }
     return { success: true };
   } catch (err) {

@@ -546,7 +546,12 @@ function start(port = 9847, autoOpen = true, host) {
 
   // Check silent task execution status
   app.get('/api/pipeline/:name/task-status/:taskId', safe((req, res) => {
-    const result = pipeline.getTaskExecStatus(req.params.name, parseInt(req.params.taskId));
+    const taskId = parseInt(req.params.taskId);
+    const result = pipeline.getTaskExecStatus(req.params.name, taskId);
+    // Broadcast merge result if auto-merge happened during status check
+    if (result.merge?.merged) {
+      broadcast(wss, { type: 'taskMerged', data: { sessionName: req.params.name, taskId } });
+    }
     res.json(result);
   }));
 

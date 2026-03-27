@@ -224,9 +224,39 @@ function updateTask(id, fields) {
   sets.push(`updated_at = datetime('now')`);
   values.push(id);
   getDb().prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+
+  // If status changed to 'completed' and task has a worktree, attempt merge
+  if (fields.status === 'completed') {
+    const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    if (task?.worktree_path) {
+      console.log(`[Task] Manual completion of task #${id} with worktree — attempting merge`);
+      const mergeResult = tryMergeWorktreeBranch(id, task);
+      return mergeResult;
+    }
+  }
 }
 
 function deleteTask(id) {
+  // Clean up worktree if task has one
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+  if (task?.worktree_path) {
+    const sessConfig = config.findSession(task.session_name);
+    if (sessConfig?.projectPath) {
+      try {
+        worktree.deleteWorktree(id, sessConfig.projectPath);
+        console.log(`[Task] Cleaned up worktree for deleted task #${id}`);
+      } catch (e) {
+        console.warn(`[Task] Failed to clean up worktree for task #${id}: ${e.message}`);
+      }
+      // Also delete the branch
+      if (task.worktree_branch) {
+        const repoRoot = worktree.getRepoRoot(sessConfig.projectPath);
+        if (repoRoot) {
+          try { execSync(`git branch -D "${task.worktree_branch}"`, { cwd: repoRoot, stdio: 'pipe' }); } catch {}
+        }
+      }
+    }
+  }
   removeTaskDependencies(id);
   getDb().prepare('DELETE FROM execution_log WHERE task_id = ?').run(id);
   getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id);
@@ -1157,19 +1187,36 @@ function getTaskExecStatus(sessionName, taskId) {
  * @returns {{ merged: boolean, conflict: boolean, conflictFiles: string[]|null, error: string|null }}
  */
 function tryMergeWorktreeBranch(taskId, task) {
+  console.log(`[Merge] Task #${taskId}: attempting merge of branch "${task.worktree_branch}"`);
   if (!task.worktree_path || !task.worktree_branch) {
+    console.warn(`[Merge] Task #${taskId}: no worktree info, skipping merge`);
     return { merged: false, conflict: false, error: 'No worktree info' };
   }
 
   const sessConfig = config.findSession(task.session_name);
   const projectPath = sessConfig?.projectPath;
   if (!projectPath) {
+    console.error(`[Merge] Task #${taskId}: no projectPath for session "${task.session_name}"`);
     return { merged: false, conflict: false, error: 'No projectPath for session' };
   }
 
   const repoRoot = worktree.getRepoRoot(projectPath);
   if (!repoRoot) {
+    console.error(`[Merge] Task #${taskId}: "${projectPath}" is not a git repo`);
     return { merged: false, conflict: false, error: 'Not a git repo' };
+  }
+
+  // Check for dirty working tree in main repo before attempting merge
+  let didStash = false;
+  try {
+    const status = execSync('git status --porcelain', { cwd: repoRoot, encoding: 'utf8', timeout: 10000 }).trim();
+    if (status) {
+      console.warn(`[Merge] Task #${taskId}: main repo has uncommitted changes, stashing before merge`);
+      execSync('git stash --include-untracked', { cwd: repoRoot, stdio: 'pipe', timeout: 10000 });
+      didStash = true;
+    }
+  } catch (e) {
+    console.warn(`[Merge] Task #${taskId}: failed to check/stash working tree: ${e.message}`);
   }
 
   const branch = task.worktree_branch;
@@ -1183,10 +1230,16 @@ function tryMergeWorktreeBranch(taskId, task) {
     });
 
     // Merge succeeded — clean up worktree and branch
+    console.log(`[Merge] Task #${taskId}: merge succeeded, cleaning up worktree and branch`);
     worktree.deleteWorktree(taskId, projectPath);
     try {
       execSync(`git branch -d "${branch}"`, { cwd: repoRoot, stdio: 'pipe' });
     } catch { /* branch may already be deleted by deleteWorktree */ }
+
+    // Pop stash if we stashed earlier
+    if (didStash) {
+      try { execSync('git stash pop', { cwd: repoRoot, stdio: 'pipe', timeout: 10000 }); } catch { /* ignore */ }
+    }
 
     // Clear worktree info from task
     getDb().prepare('UPDATE tasks SET worktree_path = NULL, worktree_branch = NULL, result = ? WHERE id = ?')
@@ -1198,10 +1251,16 @@ function tryMergeWorktreeBranch(taskId, task) {
 
     // Check if it's a merge conflict
     if (errMsg.includes('CONFLICT') || errMsg.includes('Automatic merge failed')) {
+      console.warn(`[Merge] Task #${taskId}: merge conflict detected`);
       // Abort the failed merge in the main repo
       try {
         execSync('git merge --abort', { cwd: repoRoot, stdio: 'pipe' });
       } catch { /* ignore */ }
+
+      // Pop stash after aborting merge
+      if (didStash) {
+        try { execSync('git stash pop', { cwd: repoRoot, stdio: 'pipe', timeout: 10000 }); } catch { /* ignore */ }
+      }
 
       // Extract conflicting file names
       let conflictFiles = [];
@@ -1220,8 +1279,22 @@ function tryMergeWorktreeBranch(taskId, task) {
       return { merged: false, conflict: true, conflictFiles, error: null };
     }
 
-    // Some other git error
-    return { merged: false, conflict: false, error: errMsg.substring(0, 500) };
+    // Some other git error — save to task result so it's visible in UI
+    console.error(`[Merge] Task #${taskId}: merge failed with error: ${errMsg.substring(0, 300)}`);
+
+    // Clean up after failed merge
+    try {
+      execSync('git merge --abort', { cwd: repoRoot, stdio: 'pipe' });
+    } catch { /* may not be in merge state */ }
+    if (didStash) {
+      try { execSync('git stash pop', { cwd: repoRoot, stdio: 'pipe', timeout: 10000 }); } catch { /* ignore */ }
+    }
+
+    // Set task to merge_pending so user sees it needs attention (don't silently mark completed)
+    getDb().prepare("UPDATE tasks SET status = ?, result = ?, updated_at = datetime('now') WHERE id = ?")
+      .run('merge_pending', 'Merge error: ' + errMsg.substring(0, 500), taskId);
+
+    return { merged: false, conflict: true, conflictFiles: null, error: errMsg.substring(0, 500) };
   }
 }
 

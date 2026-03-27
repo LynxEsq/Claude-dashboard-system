@@ -525,7 +525,16 @@ async function pollTaskExec(taskId, tmuxSession) {
       setTimeout(() => pollTaskExec(taskId, tmuxSession), 3000);
       return;
     }
-    // Done or error
+    // Done or error — show merge result
+    if (status.merge) {
+      if (status.merge.merged) {
+        showToast(`Task #${taskId} merged successfully`, 'success');
+      } else if (status.merge.conflict) {
+        showToast(`Task #${taskId}: merge conflict — needs manual resolution`, 'warning');
+      } else if (status.merge.error) {
+        showToast(`Task #${taskId}: merge failed — ${status.merge.error}`, 'error');
+      }
+    }
     loadTasks();
   } catch {}
 }

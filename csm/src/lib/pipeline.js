@@ -580,6 +580,7 @@ Convert the NEW wishes into actionable tasks. CRITICAL RULES:
 2. Multiple related wishes can become ONE task
 3. One complex wish can become MULTIPLE tasks
 4. Task description must be detailed enough for Claude Code to execute independently
+5. IMPORTANT: If multiple sequential steps relate to the same feature/area and should be done one after another — combine them into ONE task with all steps described inside. Do NOT create separate tasks for steps that logically belong together and will be done in one Claude Code session. Only split into separate tasks when they are truly independent or when one must be completed and verified before the next can start (e.g. different modules, different areas of the codebase, or need user review between steps).
 
 ## HANDLING EXISTING TASKS — VERY IMPORTANT:
 - If a new wish overlaps with an existing task, use "action": "update" with the existing task's "existing_id" to MERGE them — do NOT create a duplicate

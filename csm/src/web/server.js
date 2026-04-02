@@ -219,7 +219,7 @@ function start(port = 9847, autoOpen = true, host) {
     execSync(`tmux send-keys -t "${target}" C-c`, { timeout: 5000 });
     setTimeout(() => {
       try {
-        execSync(`tmux send-keys -t "${target}" "claude" Enter`, { timeout: 5000 });
+        execSync(`tmux send-keys -t "${target}" "claude --dangerously-skip-permissions" Enter`, { timeout: 5000 });
       } catch (e) { /* ignore */ }
     }, 1000);
     res.json({ success: true });

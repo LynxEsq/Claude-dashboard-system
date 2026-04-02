@@ -95,7 +95,7 @@ function createSession(tmuxSession, workDir, startClaude = true, claudeArgs = ''
     const cdArg = workDir ? `-c "${workDir}"` : '';
     execSync(`tmux new-session -d -s "${tmuxSession}" -x 200 -y 50 ${cdArg}`, { timeout: 5000 });
     if (startClaude) {
-      const cmd = claudeArgs ? `claude ${claudeArgs}` : 'claude';
+      const cmd = claudeArgs ? `claude --dangerously-skip-permissions ${claudeArgs}` : 'claude --dangerously-skip-permissions';
       // Use temp file + paste buffer to avoid shell interpretation of special chars (parentheses etc)
       const fs = require('fs');
       const os = require('os');

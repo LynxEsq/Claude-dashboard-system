@@ -532,7 +532,8 @@ function start(port = 9847, autoOpen = true, host) {
   }));
 
   app.post('/api/pipeline/:name/apply-plan', safe((req, res) => {
-    const { tasksJson, wishIds } = req.body;
+    const { tasksJson } = req.body;
+    const wishIds = Array.isArray(req.body.wishIds) ? req.body.wishIds : [];
     const result = pipeline.applyPlan(req.params.name, tasksJson, wishIds);
     if (result.success) {
       // Include full task list with dependencies in broadcast

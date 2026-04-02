@@ -184,6 +184,7 @@ function deleteWish(id) {
 }
 
 function clearWishesBatchId(wishIds) {
+  if (!Array.isArray(wishIds)) return;
   const stmt = getDb().prepare('UPDATE wishes SET planning_batch_id = NULL WHERE id = ?');
   for (const id of wishIds) {
     stmt.run(id);
@@ -191,6 +192,7 @@ function clearWishesBatchId(wishIds) {
 }
 
 function markWishesProcessed(wishIds, taskIds) {
+  if (!Array.isArray(wishIds)) return;
   const stmt = getDb().prepare(`
     UPDATE wishes
     SET processed = 1, processed_at = datetime('now'), task_ids = ?

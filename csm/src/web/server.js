@@ -225,6 +225,24 @@ function start(port = 9847, autoOpen = true, host) {
     res.json({ success: true });
   }));
 
+  // Recreate the main tmux session for a project (when it died)
+  app.post('/api/sessions/:name/recreate-tmux', safe((req, res) => {
+    const sess = config.findSession(req.params.name);
+    if (!sess) return res.status(404).json({ error: 'Session not found' });
+
+    if (tmux.sessionExists(sess.tmuxSession)) {
+      return res.status(400).json({ error: 'Session already alive' });
+    }
+
+    const result = tmux.createSession(sess.tmuxSession, sess.projectPath || null, true);
+    if (!result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    monitor?.reload();
+    res.json({ success: true });
+  }));
+
   // Send raw keys (Enter, Ctrl+C, arrows, etc.) to a session
   app.post('/api/sessions/:name/keys', safe((req, res) => {
     const sess = config.findSession(req.params.name);

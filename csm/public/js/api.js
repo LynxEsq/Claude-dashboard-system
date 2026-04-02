@@ -139,6 +139,7 @@ const API = {
 
   // ─── Session Tmux Sessions ───────────────────
   getSessionTmuxList: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/tmux-sessions`),
+  recreateTmuxSession: (name) => apiFetch(`/api/sessions/${encodeURIComponent(name)}/recreate-tmux`, { method: 'POST' }),
 
   // ─── Filesystem ──────────────────────────────
   listDir: (dirPath) => apiFetch(`/api/fs/list?path=${encodeURIComponent(dirPath || '')}`),

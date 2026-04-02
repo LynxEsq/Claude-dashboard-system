@@ -1349,16 +1349,28 @@ async function showProjectInfo(name) {
       const termBtn = State.isRemote
         ? `<button class="btn sm" onclick="event.stopPropagation();showSshCommand('${esc(s.tmuxSession)}')" style="font-size:10px;padding:2px 6px">SSH</button>`
         : `<button class="btn sm" onclick="event.stopPropagation();API.openTmuxSession('_','${esc(s.tmuxSession)}')" style="font-size:10px;padding:2px 6px">Attach</button>`;
+      const createBtn = s.type === 'project' && !s.alive
+        ? `<button class="btn sm" onclick="event.stopPropagation();recreateProjectTmux('${esc(n)}')" style="font-size:10px;padding:2px 6px">Создать сессию</button>`
+        : '';
       return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
         ${dot}${badge}
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.label)}">${esc(s.label)}</span>
         <code style="font-size:10px;color:var(--text2)">${esc(s.tmuxSession)}</code>
-        ${s.alive ? termBtn : ''}
+        ${s.alive ? termBtn : createBtn}
       </div>`;
     }).join('');
   } catch {
     el('pi-tmux-list').innerHTML = '<div style="color:var(--text2);font-size:11px">Could not load sessions</div>';
   }
+}
+
+async function recreateProjectTmux(name) {
+  try {
+    await API.recreateTmuxSession(name);
+    showToast('Tmux session created', 'info');
+    // Refresh the tmux list in the modal
+    showProjectInfo(name);
+  } catch (err) { handleApiError(err, 'recreateProjectTmux'); }
 }
 
 async function saveProjectInfo() {

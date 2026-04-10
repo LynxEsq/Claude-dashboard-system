@@ -681,10 +681,10 @@ function setTermContent(text, isAnsi) {
   const body = el('termBody');
   if (isAnsi) {
     body.innerHTML = ansiHtml(text);
-    linkifyTerminalDOM(body);
   } else {
     body.textContent = text;
   }
+  linkifyTerminalDOM(body);
 }
 
 function renderTerminal() {

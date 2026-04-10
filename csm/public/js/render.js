@@ -602,13 +602,66 @@ function renderTasksBoard() {
 
 // ─── Column 4: Terminal ──────────────────────────
 
-/** Detect URLs and file paths in terminal HTML and make them clickable */
-function linkifyTerminal(html) {
-  // Linkify URLs
-  html = html.replace(/(https?:\/\/[^\s<>"')\]]+)/g, '<a class="term-link" href="$1" target="_blank" rel="noopener">$1</a>');
-  // Linkify file paths with line numbers (e.g. /path/to/file:123:45)
-  html = html.replace(/(\/[\w./-]+\.\w+:\d+(?::\d+)?)/g, '<span class="term-file-link" onclick="copyFilePath(\'$1\')" title="Click to copy">$1</span>');
-  return html;
+/** Linkify URLs and file paths in terminal output by walking DOM text nodes */
+function linkifyTerminalDOM(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+
+  for (const node of nodes) {
+    const text = node.textContent;
+    // Match URLs or file paths with line numbers
+    const re = /(https?:\/\/[^\s<>"')\]]+)|((?:\/[\w./-]+\.[\w]+)(?::\d+(?::\d+)?)?)|(\.\/[\w./-]+\.[\w]+(?::\d+(?::\d+)?)?)/g;
+    let match;
+    const parts = [];
+    let lastIdx = 0;
+
+    while ((match = re.exec(text)) !== null) {
+      if (match.index > lastIdx) {
+        parts.push({ type: 'text', value: text.slice(lastIdx, match.index) });
+      }
+      if (match[1]) {
+        parts.push({ type: 'url', value: match[1] });
+      } else if (match[2] || match[3]) {
+        const path = match[2] || match[3];
+        // Filter out false positives (too short or common non-paths)
+        if (path.length > 4 && path.includes('/')) {
+          parts.push({ type: 'path', value: path });
+        } else {
+          parts.push({ type: 'text', value: path });
+        }
+      }
+      lastIdx = match.index + match[0].length;
+    }
+
+    if (parts.length === 0) continue;
+    if (lastIdx < text.length) {
+      parts.push({ type: 'text', value: text.slice(lastIdx) });
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const p of parts) {
+      if (p.type === 'url') {
+        const a = document.createElement('a');
+        a.className = 'term-link';
+        a.href = p.value;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = p.value;
+        frag.appendChild(a);
+      } else if (p.type === 'path') {
+        const span = document.createElement('span');
+        span.className = 'term-file-link';
+        span.textContent = p.value;
+        span.title = 'Click to copy';
+        span.onclick = () => copyFilePath(p.value);
+        frag.appendChild(span);
+      } else {
+        frag.appendChild(document.createTextNode(p.value));
+      }
+    }
+    node.parentNode.replaceChild(frag, node);
+  }
 }
 
 /** Copy a file path to clipboard and show toast */
@@ -627,7 +680,8 @@ function copyFilePath(filePath) {
 function setTermContent(text, isAnsi) {
   const body = el('termBody');
   if (isAnsi) {
-    body.innerHTML = linkifyTerminal(ansiHtml(text));
+    body.innerHTML = ansiHtml(text);
+    linkifyTerminalDOM(body);
   } else {
     body.textContent = text;
   }

@@ -263,8 +263,20 @@ header h1 {
 /* ─── 4-Column Layout ─────────────────────────── */
 .columns {
   display: grid;
-  grid-template-columns: 220px 280px 1fr 1fr;
+  grid-template-columns: var(--col0, 220px) 4px var(--col1, 280px) 4px 1fr 4px 1fr;
   height: calc(100vh - 48px);
+}
+
+.col-resize {
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.col-resize:hover,
+.col-resize.dragging {
+  background: var(--blue, #58a6ff);
+  opacity: 0.6;
 }
 
 .col {

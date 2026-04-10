@@ -20,6 +20,11 @@ function selectProject(name) {
   el('addTaskBtn').disabled = false;
   el('wishHint').textContent = `Adding to: ${name}`;
 
+  // Send WS subscribe for granular updates
+  if (window._ws && window._ws.readyState === WebSocket.OPEN) {
+    window._ws.send(JSON.stringify({ type: 'subscribe', project: name }));
+  }
+
   loadWishes();
   loadTasks();
   checkPlanStatus();
@@ -1470,3 +1475,217 @@ function dirBrowserSelect() {
 
 function showModal(name) { el(`modal-${name}`).classList.add('visible'); }
 function hideModal(name) { el(`modal-${name}`).classList.remove('visible'); }
+
+// ─── Kanban Board ───────────────────────────────
+
+function toggleTaskView() {
+  State.taskView = State.taskView === 'list' ? 'board' : 'list';
+  el('taskViewBtn').textContent = State.taskView === 'list' ? 'Board' : 'List';
+  renderTasks();
+}
+
+function dragTask(event, taskId) {
+  event.dataTransfer.setData('text/plain', taskId);
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+async function dropTask(event, newStatus) {
+  event.preventDefault();
+  const taskId = parseInt(event.dataTransfer.getData('text/plain'));
+  if (!taskId || !State.selected) return;
+
+  // Only allow transitions to pending, completed, or failed
+  if (newStatus === 'running' || newStatus === 'merge_pending') return;
+
+  const task = State.tasks.find(t => t.id === taskId);
+  if (!task || newStatus === task.status) return;
+
+  try {
+    await API.updateTask(taskId, { status: newStatus });
+    loadTasks();
+  } catch (err) {
+    handleApiError(err, 'dropTask');
+  }
+}
+
+// ─── Command Palette ────────────────────────────
+
+function openPalette() {
+  el('paletteOverlay').classList.add('visible');
+  el('paletteInput').value = '';
+  el('paletteInput').focus();
+  State._paletteIdx = 0;
+  State._paletteItems = [];
+  updatePaletteResults('');
+}
+
+function closePalette() {
+  el('paletteOverlay').classList.remove('visible');
+}
+
+function buildPaletteItems() {
+  const items = [];
+
+  // Sessions
+  for (const [name, s] of Object.entries(State.sessions)) {
+    items.push({ type: 'session', label: name, detail: s.status, action: () => selectProject(name) });
+  }
+
+  // Tasks
+  for (const t of State.tasks) {
+    items.push({ type: 'task', label: `#${t.id}: ${t.title}`, detail: t.status, action: () => selectTask(t.id) });
+  }
+
+  // Wishes
+  for (const w of State.wishes) {
+    items.push({ type: 'wish', label: (w.content || '').substring(0, 80), detail: 'wish', action: () => selectWish(w.id) });
+  }
+
+  // Actions
+  items.push({ type: 'action', label: 'Create Project', detail: 'action', action: () => showModal('create') });
+  items.push({ type: 'action', label: 'Plan Tasks', detail: 'action', action: () => planFromWishes() });
+  items.push({ type: 'action', label: 'Run Next Task', detail: 'action', action: () => executeNext() });
+  if (State.selected) {
+    items.push({ type: 'action', label: 'Focus tmux', detail: 'action', action: () => focusSelected() });
+    items.push({ type: 'action', label: 'Restart Claude', detail: 'action', action: () => restartSelected() });
+  }
+
+  return items;
+}
+
+function updatePaletteResults(query) {
+  const items = buildPaletteItems();
+  const q = query.toLowerCase();
+  const filtered = q ? items.filter(i => i.label.toLowerCase().includes(q) || i.detail.includes(q)) : items.slice(0, 15);
+
+  State._paletteIdx = 0;
+  State._paletteItems = filtered;
+
+  el('paletteResults').innerHTML = filtered.slice(0, 20).map((item, i) => `
+    <div class="palette-item ${i === 0 ? 'active' : ''}" onclick="executePaletteItem(${i})" data-idx="${i}">
+      <span class="palette-type palette-type-${item.type}">${item.type}</span>
+      <span class="palette-label">${esc(item.label)}</span>
+      <span class="palette-detail">${esc(item.detail)}</span>
+    </div>
+  `).join('') || '<div class="palette-empty">No results</div>';
+}
+
+function handlePaletteKey(event) {
+  if (event.key === 'Escape') { closePalette(); return; }
+  if (event.key === 'ArrowDown') { event.preventDefault(); movePaletteSelection(1); }
+  if (event.key === 'ArrowUp') { event.preventDefault(); movePaletteSelection(-1); }
+  if (event.key === 'Enter') { event.preventDefault(); executePaletteItem(State._paletteIdx); }
+}
+
+function movePaletteSelection(delta) {
+  const items = el('paletteResults').querySelectorAll('.palette-item');
+  if (items.length === 0) return;
+  items[State._paletteIdx]?.classList.remove('active');
+  State._paletteIdx = Math.max(0, Math.min(items.length - 1, State._paletteIdx + delta));
+  items[State._paletteIdx]?.classList.add('active');
+  items[State._paletteIdx]?.scrollIntoView({ block: 'nearest' });
+}
+
+function executePaletteItem(idx) {
+  const item = State._paletteItems[idx];
+  if (item?.action) {
+    closePalette();
+    item.action();
+  }
+}
+
+// ─── Terminal Search ────────────────────────────
+
+function openTermSearch() {
+  el('termSearch').style.display = 'flex';
+  el('termSearchInput').focus();
+  el('termSearchInput').value = '';
+  el('termSearchCount').textContent = '';
+  // Pause live mode during search
+  State._searchWasLive = State.liveMode;
+  if (State.liveMode) {
+    el('termLive').checked = false;
+    toggleLive();
+  }
+}
+
+function closeTermSearch() {
+  el('termSearch').style.display = 'none';
+  clearTermHighlights();
+  // Resume live mode if it was on
+  if (State._searchWasLive) {
+    el('termLive').checked = true;
+    toggleLive();
+  }
+}
+
+function clearTermHighlights() {
+  const marks = el('termBody').querySelectorAll('mark.term-match');
+  marks.forEach(m => {
+    const parent = m.parentNode;
+    parent.replaceChild(document.createTextNode(m.textContent), m);
+    parent.normalize();
+  });
+  State._termSearchMatches = [];
+  State._termSearchIdx = 0;
+}
+
+function searchTerminal(query) {
+  clearTermHighlights();
+  if (!query || query.length < 2) {
+    el('termSearchCount').textContent = '';
+    return;
+  }
+
+  const body = el('termBody');
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+  const lq = query.toLowerCase();
+  let totalMatches = 0;
+
+  // Process in reverse to avoid offset issues
+  for (let i = textNodes.length - 1; i >= 0; i--) {
+    const node = textNodes[i];
+    const text = node.textContent;
+    const ltext = text.toLowerCase();
+    let idx = ltext.lastIndexOf(lq);
+    while (idx !== -1) {
+      const range = document.createRange();
+      range.setStart(node, idx);
+      range.setEnd(node, idx + query.length);
+      const mark = document.createElement('mark');
+      mark.className = 'term-match';
+      range.surroundContents(mark);
+      totalMatches++;
+      idx = ltext.lastIndexOf(lq, idx - 1);
+    }
+  }
+
+  State._termSearchMatches = body.querySelectorAll('mark.term-match');
+  State._termSearchIdx = State._termSearchMatches.length - 1; // start from last (bottom)
+  el('termSearchCount').textContent = totalMatches > 0 ? `${totalMatches} found` : 'No matches';
+
+  if (State._termSearchMatches.length > 0) {
+    State._termSearchMatches[State._termSearchIdx].classList.add('current');
+    State._termSearchMatches[State._termSearchIdx].scrollIntoView({ block: 'center' });
+  }
+}
+
+function handleTermSearchKey(event) {
+  if (event.key === 'Escape') { closeTermSearch(); return; }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    termSearchNav(event.shiftKey ? -1 : 1);
+  }
+}
+
+function termSearchNav(direction) {
+  const matches = State._termSearchMatches;
+  if (!matches || matches.length === 0) return;
+  matches[State._termSearchIdx]?.classList.remove('current');
+  State._termSearchIdx = (State._termSearchIdx + direction + matches.length) % matches.length;
+  matches[State._termSearchIdx]?.classList.add('current');
+  matches[State._termSearchIdx]?.scrollIntoView({ block: 'center' });
+}

@@ -3,23 +3,11 @@
  */
 let ws = null;
 
-function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}`);
-
-  ws.onopen = () => el('connDot').classList.remove('off');
-
-  ws.onclose = () => {
-    el('connDot').classList.add('off');
-    setTimeout(connectWS, 3000);
-  };
-
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-
+function handleMessage(msg) {
     switch (msg.type) {
       case 'state':
         State.sessions = msg.data;
+        State.loading = false;
         renderProjects();
         loadAllTaskCounts();
         break;
@@ -125,6 +113,26 @@ function connectWS() {
           reloadTaskCountsFor(msg.data.sessionName);
         }
         break;
+    }
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}`);
+  window._ws = ws;
+
+  ws.onopen = () => el('connDot').classList.remove('off');
+
+  ws.onclose = () => {
+    el('connDot').classList.add('off');
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = (event) => {
+    const raw = JSON.parse(event.data);
+    const messages = Array.isArray(raw) ? raw : [raw];
+    for (const msg of messages) {
+      handleMessage(msg);
     }
   };
 }

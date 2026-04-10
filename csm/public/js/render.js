@@ -80,6 +80,14 @@ function handleApiError(err, context) {
 
 function renderProjects() {
   const list = el('projectList');
+
+  if (State.loading) {
+    list.innerHTML = Array.from({length: 3}, () =>
+      '<div class="skeleton-project"><div class="skeleton skeleton-dot"></div><div style="flex:1"><div class="skeleton skeleton-line w60"></div></div></div>'
+    ).join('');
+    return;
+  }
+
   const names = Object.keys(State.sessions);
 
   if (names.length === 0) {
@@ -454,6 +462,19 @@ function renderNestedTasks(parentId, nestedUnder, hasWishFilter, linkedTaskIds) 
 
 function renderTasks() {
   const list = el('taskList');
+
+  if (State.loading) {
+    list.innerHTML = Array.from({length: 3}, () =>
+      '<div class="skeleton-task skeleton"><div class="skeleton skeleton-line w80"></div><div class="skeleton skeleton-line w60"></div></div>'
+    ).join('');
+    return;
+  }
+
+  if (State.taskView === 'board') {
+    renderTasksBoard();
+    return;
+  }
+
   if (State.tasks.length === 0) {
     list.innerHTML = '<div class="empty-msg">No tasks yet.<br>Add wishes and click Plan.</div>';
     el('taskCount').textContent = '';
@@ -525,13 +546,88 @@ function renderTasks() {
   list.innerHTML = html;
 }
 
+// ─── Kanban Board View ──────────────────────────
+
+function renderTasksBoard() {
+  const list = el('taskList');
+  if (State.tasks.length === 0) {
+    list.innerHTML = '<div class="empty-msg">No tasks yet.<br>Add wishes and click Plan.</div>';
+    el('taskCount').textContent = '';
+    return;
+  }
+
+  const pending = State.tasks.filter(t => t.status === 'pending' && t.type !== 'plan').length;
+  const running = State.tasks.filter(t => t.status === 'running' && t.type !== 'plan').length;
+  const merging = State.tasks.filter(t => t.status === 'merge_pending' && t.type !== 'plan').length;
+  el('taskCount').textContent = `(${pending}p${running ? ' ' + running + 'r' : ''}${merging ? ' ' + merging + 'm' : ''})`;
+
+  const columns = [
+    { key: 'pending', label: 'Pending', droppable: true },
+    { key: 'running', label: 'Running', droppable: false },
+    { key: 'merge_pending', label: 'Merge', droppable: false },
+    { key: 'completed', label: 'Done', droppable: true },
+    { key: 'failed', label: 'Failed', droppable: true },
+  ];
+
+  const grouped = {};
+  for (const col of columns) grouped[col.key] = [];
+  for (const t of State.tasks) {
+    if (t.type === 'plan') continue;
+    if (grouped[t.status]) grouped[t.status].push(t);
+  }
+
+  let html = '<div class="kanban-board">';
+  for (const col of columns) {
+    const tasks = grouped[col.key];
+    const dropAttrs = col.droppable
+      ? `ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="this.classList.remove('drag-over');dropTask(event,'${col.key}')"`
+      : '';
+    html += `<div class="kanban-column" ${dropAttrs}>`;
+    html += `<div class="kanban-col-header"><span>${col.label}</span><span class="kanban-count">${tasks.length}</span></div>`;
+    html += '<div class="kanban-col-body">';
+    for (const t of tasks) {
+      const activeClass = State.selectedTask === t.id ? ' active' : '';
+      html += `<div class="kanban-card${activeClass}" draggable="true" ondragstart="dragTask(event,${t.id})" onclick="selectTask(${t.id})">`;
+      html += `<div class="kanban-card-title">${esc(t.title)}</div>`;
+      if (t.description) {
+        html += `<div class="kanban-card-desc">${esc(t.description).substring(0, 80)}</div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+  html += '</div>';
+  list.innerHTML = html;
+}
+
 // ─── Column 4: Terminal ──────────────────────────
+
+/** Detect URLs and file paths in terminal HTML and make them clickable */
+function linkifyTerminal(html) {
+  // Linkify URLs
+  html = html.replace(/(https?:\/\/[^\s<>"')\]]+)/g, '<a class="term-link" href="$1" target="_blank" rel="noopener">$1</a>');
+  // Linkify file paths with line numbers (e.g. /path/to/file:123:45)
+  html = html.replace(/(\/[\w./-]+\.\w+:\d+(?::\d+)?)/g, '<span class="term-file-link" onclick="copyFilePath(\'$1\')" title="Click to copy">$1</span>');
+  return html;
+}
+
+/** Copy a file path to clipboard and show toast */
+function copyFilePath(filePath) {
+  const clean = filePath.replace(/:\d+(:\d+)?$/, '');
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(clean).then(() => showToast('Copied: ' + clean, 'info', { duration: 2000 })).catch(() => {
+      showToast('Copy failed', 'error');
+    });
+  } else {
+    showToast(clean, 'info', { duration: 3000 });
+  }
+}
 
 /** Set terminal body content: use innerHTML with ANSI rendering for live output, textContent for static messages */
 function setTermContent(text, isAnsi) {
   const body = el('termBody');
   if (isAnsi) {
-    body.innerHTML = ansiHtml(text);
+    body.innerHTML = linkifyTerminal(ansiHtml(text));
   } else {
     body.textContent = text;
   }
@@ -579,7 +675,9 @@ function renderTerminal() {
   el('termTitle').textContent = State.selected;
   el('termDot').className = `status-dot ${s.status}`;
 
-  if (s.lastOutput) {
+  if (s.paneBuffer) {
+    setTermContent(s.paneBuffer, true);
+  } else if (s.lastOutput) {
     setTermContent(s.lastOutput, true);
   } else if (s.status === 'offline') {
     setTermContent(`Session offline: ${s.detail || 'tmux pane not available'}.\nCheck that the tmux session exists and the pane target is correct.`, false);

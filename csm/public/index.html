@@ -50,6 +50,8 @@
     </div>
   </div>
 
+  <div class="col-resize" data-col="0"></div>
+
   <!-- Column 2: Wishes (Inbox) -->
   <div class="col">
     <div class="col-header">
@@ -67,10 +69,13 @@
     </div>
   </div>
 
+  <div class="col-resize" data-col="1"></div>
+
   <!-- Column 3: Tasks -->
   <div class="col">
     <div class="col-header">
       Tasks <span id="taskCount" style="color:var(--blue)"></span>
+      <button class="btn sm" onclick="toggleTaskView()" id="taskViewBtn" title="Toggle list/board view">Board</button>
     </div>
     <div class="task-actions-bar">
       <button class="btn green" onclick="planFromWishes()" id="planBtn" disabled title="AI converts wishes into tasks">Plan</button>
@@ -81,6 +86,8 @@
       <div class="empty-msg">Select a project</div>
     </div>
   </div>
+
+  <div class="col-resize" data-col="2"></div>
 
   <!-- Column 4: Terminal -->
   <div class="col col-terminal" style="border-right:none">
@@ -100,6 +107,13 @@
         <button class="btn sm" onclick="focusSelected()">Focus</button>
         <button class="btn sm" onclick="restartSelected()">Restart</button>
       </div>
+    </div>
+    <div class="term-search" id="termSearch" style="display:none">
+      <input type="text" id="termSearchInput" placeholder="Search..." oninput="searchTerminal(this.value)" onkeydown="handleTermSearchKey(event)">
+      <span id="termSearchCount" style="font-size:10px;color:var(--text2)"></span>
+      <button class="btn sm" onclick="termSearchNav(-1)">&#9650;</button>
+      <button class="btn sm" onclick="termSearchNav(1)">&#9660;</button>
+      <button class="btn sm" onclick="closeTermSearch()">&times;</button>
     </div>
     <div class="terminal-body" id="termBody">Select a project or task to see output...</div>
     <div class="terminal-keys">
@@ -274,6 +288,16 @@
   </div>
 </div>
 
+<!-- Command Palette -->
+<div class="palette-overlay" id="paletteOverlay" onclick="if(event.target===this)closePalette()">
+  <div class="palette">
+    <input type="text" id="paletteInput" placeholder="Search sessions, tasks, wishes, actions..." autocomplete="off"
+           oninput="updatePaletteResults(this.value)"
+           onkeydown="handlePaletteKey(event)">
+    <div class="palette-results" id="paletteResults"></div>
+  </div>
+</div>
+
 <!-- JS Modules -->
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
 <script>
@@ -286,6 +310,7 @@
 <script src="/js/api.js"></script>
 <script src="/js/render.js"></script>
 <script src="/js/actions.js"></script>
+<script src="/js/resize.js"></script>
 <script src="/js/websocket.js"></script>
 <script>
   // ─── Init ──────────────────────────────────────
@@ -315,6 +340,22 @@
   // Ctrl+Enter in wish textarea
   el('wishText')?.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') addWish();
+  });
+
+  // Global keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    // Ctrl+K: Command palette
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      openPalette();
+    }
+    // Ctrl+F: Terminal search (only when a project is selected, not in inputs)
+    if ((e.metaKey || e.ctrlKey) && e.key === 'f' && State.selected) {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      openTermSearch();
+    }
   });
 </script>
 

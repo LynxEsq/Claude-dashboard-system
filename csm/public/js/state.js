@@ -8,6 +8,8 @@ const State = {
   wishes: [],
   tasks: [],
   alerts: [],
+  loading: true,         // skeleton loading state
+  taskView: 'list',      // 'list' or 'board'
   editingWish: null,    // wish id being edited
   editingTask: null,    // task id being edited
   planningSession: null, // tmux session name when planning is active

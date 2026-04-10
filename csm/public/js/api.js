@@ -84,6 +84,9 @@ const API = {
   updateTask: (id, data) => apiFetch(`/api/pipeline/tasks/${id}`, {
     method: 'PUT', headers: CT, body: JSON.stringify(data)
   }),
+  updateTaskStatus: (id, status) => apiFetch(`/api/pipeline/tasks/${id}/status`, {
+    method: 'PUT', headers: CT, body: JSON.stringify({ status })
+  }),
   deleteTask: (id) => apiFetch(`/api/pipeline/tasks/${id}`, { method: 'DELETE' }),
 
   // ─── Pipeline ────────────────────────────────

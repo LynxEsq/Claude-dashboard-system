@@ -134,6 +134,7 @@ class SessionMonitor extends EventEmitter {
     session.detail = detail;
     session.tokens = tokens;
     session.lastOutput = lastOutput;
+    session.paneBuffer = paneOutput;  // full captured output for instant replay
     session.lastUpdate = new Date();
 
     if (prevStatus !== status) {

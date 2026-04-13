@@ -54,7 +54,7 @@ function listTmuxSessions() {
  */
 function sessionExists(tmuxSession) {
   try {
-    execSync(`tmux has-session -t "${tmuxSession}"`, { timeout: 5000 });
+    execSync(`tmux has-session -t "${tmuxSession}"`, { timeout: 5000, stdio: 'pipe' });
     return true;
   } catch {
     return false;

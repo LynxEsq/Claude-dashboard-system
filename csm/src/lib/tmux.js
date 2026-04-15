@@ -96,13 +96,14 @@ function createSession(tmuxSession, workDir, startClaude = true, claudeArgs = ''
     execSync(`tmux new-session -d -s "${tmuxSession}" -x 200 -y 50 ${cdArg}`, { timeout: 5000 });
     if (startClaude) {
       const cmd = claudeArgs ? `claude --dangerously-skip-permissions ${claudeArgs}` : 'claude --dangerously-skip-permissions';
-      // Use temp file + paste buffer to avoid shell interpretation of special chars (parentheses etc)
+      // Use temp file + named paste buffer to avoid shell interpretation and buffer conflicts
       const fs = require('fs');
       const os = require('os');
+      const bufName = `csm-${tmuxSession.replace(/[^a-zA-Z0-9_-]/g, '')}`;
       const tmpFile = require('path').join(os.tmpdir(), `csm-claude-cmd-${Date.now()}.txt`);
       fs.writeFileSync(tmpFile, cmd);
-      execSync(`tmux load-buffer "${tmpFile}"`, { timeout: 5000 });
-      execSync(`tmux paste-buffer -t "${tmuxSession}"`, { timeout: 5000 });
+      execSync(`tmux load-buffer -b "${bufName}" "${tmpFile}"`, { timeout: 5000 });
+      execSync(`tmux paste-buffer -b "${bufName}" -t "${tmuxSession}" -d`, { timeout: 5000 });
       execSync(`tmux send-keys -t "${tmuxSession}" Enter`, { timeout: 5000 });
       try { fs.unlinkSync(tmpFile); } catch {}
     }
@@ -133,11 +134,12 @@ function sendText(tmuxSession, tmuxWindow, tmuxPane, text) {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
+  const bufName = `csm-send-${tmuxSession.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}`;
   const tmpFile = path.join(os.tmpdir(), `csm-input-${Date.now()}.txt`);
   try {
     fs.writeFileSync(tmpFile, text);
-    execSync(`tmux load-buffer "${tmpFile}"`, { timeout: 5000 });
-    execSync(`tmux paste-buffer -t "${target}"`, { timeout: 5000 });
+    execSync(`tmux load-buffer -b "${bufName}" "${tmpFile}"`, { timeout: 5000 });
+    execSync(`tmux paste-buffer -b "${bufName}" -t "${target}" -d`, { timeout: 5000 });
     execSync(`tmux send-keys -t "${target}" Enter`, { timeout: 5000 });
     return true;
   } catch {

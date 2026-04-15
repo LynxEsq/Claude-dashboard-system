@@ -594,6 +594,18 @@
 .btn.danger { color: var(--red); }
 .btn.sm { padding: 2px 6px; font-size: 10px; }
 
+.restart-terminal-btn {
+  display: block;
+  margin: 16px auto 0;
+  padding: 8px 20px;
+  font-size: 13px;
+  background: rgba(56,139,253,0.15);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.restart-terminal-btn:hover { background: rgba(56,139,253,0.25); }
+.restart-terminal-btn:disabled { opacity: 0.5; cursor: wait; }
+
 .empty-msg {
   text-align: center;
   color: var(--text2);

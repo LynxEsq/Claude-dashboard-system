@@ -1080,9 +1080,17 @@ function showProjectCtxMenu(e, name) {
   ctxMenuTarget = name;
 
   const menu = el('projectCtxMenu');
-  menu.style.top = e.clientY + 'px';
-  menu.style.left = e.clientX + 'px';
   menu.classList.add('visible');
+
+  let top = e.clientY;
+  let left = e.clientX;
+  if (top + menu.offsetHeight > window.innerHeight) top = e.clientY - menu.offsetHeight;
+  if (left + menu.offsetWidth > window.innerWidth) left = e.clientX - menu.offsetWidth;
+  if (top < 0) top = 0;
+  if (left < 0) left = 0;
+
+  menu.style.top = top + 'px';
+  menu.style.left = left + 'px';
 }
 
 function hideProjectCtxMenu() {

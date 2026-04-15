@@ -735,6 +735,22 @@ function renderTerminal() {
     setTermContent(s.lastOutput, true);
   } else if (s.status === 'offline') {
     setTermContent(`Session offline: ${s.detail || 'tmux pane not available'}.\nCheck that the tmux session exists and the pane target is correct.`, false);
+    const restartBtn = document.createElement('button');
+    restartBtn.className = 'btn restart-terminal-btn';
+    restartBtn.textContent = 'Restart Terminal';
+    restartBtn.onclick = async () => {
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting...';
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(State.selected)}/recreate-tmux`, { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) restartBtn.textContent = data.error || 'Failed';
+      } catch (e) {
+        restartBtn.textContent = 'Error: ' + e.message;
+        restartBtn.disabled = false;
+      }
+    };
+    el('termBody').appendChild(restartBtn);
   } else if (s.status === 'working') {
     setTermContent(`Claude is working... (${s.detail || 'processing'})\nWaiting for terminal output to appear.`, false);
   } else {

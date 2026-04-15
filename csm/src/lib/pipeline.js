@@ -790,6 +790,60 @@ function _cleanStaleExec(taskId) {
 }
 
 /**
+ * Poll tmux pane until Claude CLI is ready, then paste the prompt via named buffer.
+ * Checks every 500ms for up to 30 seconds for Claude's input prompt marker.
+ */
+function _waitForClaudeAndSendPrompt(execTmux, promptFile, taskId) {
+  const POLL_INTERVAL = 500;
+  const MAX_WAIT = 30000;
+  let elapsed = 0;
+
+  const timer = setInterval(() => {
+    elapsed += POLL_INTERVAL;
+    try {
+      const paneContent = tmux.capturePane(execTmux, null, null);
+      // Claude CLI shows ">" prompt or "╭" box-drawing char when ready
+      const isReady = paneContent && (/^[>❯]\s/m.test(paneContent) || /╭/m.test(paneContent));
+
+      if (isReady) {
+        clearInterval(timer);
+        console.log(`[Task ${taskId}] Claude ready after ${elapsed}ms, sending prompt`);
+        try {
+          const bufName = `csm-prompt-${taskId}`;
+          execSync(`tmux load-buffer -b "${bufName}" "${promptFile}"`, { timeout: 5000 });
+          execSync(`tmux paste-buffer -b "${bufName}" -t "${execTmux}" -d`, { timeout: 5000 });
+          setTimeout(() => {
+            try {
+              execSync(`tmux send-keys -t "${execTmux}" Enter`, { timeout: 5000 });
+            } catch {}
+          }, 1000);
+        } catch (e) {
+          console.error(`[Task ${taskId}] Failed to send prompt:`, e.message);
+        }
+        return;
+      }
+
+      if (elapsed >= MAX_WAIT) {
+        clearInterval(timer);
+        console.error(`[Task ${taskId}] Claude did not start within ${MAX_WAIT / 1000}s. Pane content:\n${paneContent || '(empty)'}`);
+        // Update task status so user knows something went wrong
+        try {
+          updateTaskStatus(taskId, 'pending', 'Claude CLI failed to start in time, reset to pending');
+        } catch {}
+      }
+    } catch (e) {
+      if (elapsed >= MAX_WAIT) {
+        clearInterval(timer);
+        console.error(`[Task ${taskId}] Error polling Claude readiness:`, e.message);
+        try {
+          updateTaskStatus(taskId, 'pending', 'Error waiting for Claude CLI, reset to pending');
+        } catch {}
+      }
+    }
+  }, POLL_INTERVAL);
+}
+
+/**
  * Execute a task interactively: create a tmux session, start Claude, paste the prompt.
  */
 function executeTaskInteractive(sessionName, taskId, opts = {}) {
@@ -852,20 +906,8 @@ function executeTaskInteractive(sessionName, taskId, opts = {}) {
   const promptFile = path.join(os.tmpdir(), `csm-task-prompt-${safeName}-${taskId}.txt`);
   fs.writeFileSync(promptFile, _buildTaskPrompt(task));
 
-  // Wait for Claude to start, then paste prompt
-  setTimeout(() => {
-    try {
-      execSync(`tmux load-buffer "${promptFile}"`, { timeout: 5000 });
-      execSync(`tmux paste-buffer -t "${execTmux}"`, { timeout: 5000 });
-      setTimeout(() => {
-        try {
-          execSync(`tmux send-keys -t "${execTmux}" Enter`, { timeout: 5000 });
-        } catch {}
-      }, 1000);
-    } catch (e) {
-      console.error('[Task] Failed to send prompt:', e.message);
-    }
-  }, 5000);
+  // Poll for Claude readiness, then paste prompt via named buffer
+  _waitForClaudeAndSendPrompt(execTmux, promptFile, taskId);
 
   updateTaskStatus(taskId, 'running');
   // Save worktree_path and worktree_branch in the tasks table

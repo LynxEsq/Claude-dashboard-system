@@ -76,6 +76,56 @@ function handleApiError(err, context) {
   }
 }
 
+// ─── Pure helpers (unit-testable) ────────────────
+
+function sortProjects(sessions, mode) {
+  const names = Object.keys(sessions);
+  const sorted = [...names];
+  switch (mode) {
+    case 'name':
+      sorted.sort((a, b) => a.localeCompare(b));
+      break;
+    case 'added':
+      sorted.sort((a, b) => {
+        const ax = sessions[a].addedAt;
+        const bx = sessions[b].addedAt;
+        if (ax == null && bx == null) return a.localeCompare(b);
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return bx - ax;
+      });
+      break;
+    case 'activity':
+    default:
+      sorted.sort((a, b) => {
+        const ax = sessions[a].lastActivityAt;
+        const bx = sessions[b].lastActivityAt;
+        if (ax == null && bx == null) return a.localeCompare(b);
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return bx - ax;
+      });
+  }
+  return sorted;
+}
+
+function wouldReorder(name, newTs, snapshot, sessions) {
+  const idx = snapshot.indexOf(name);
+  if (idx <= 0) return false;  // not in list, or already on top
+  for (let i = 0; i < idx; i++) {
+    const otherTs = sessions[snapshot[i]]?.lastActivityAt ?? 0;
+    if (otherTs < newTs) return true;
+  }
+  return false;
+}
+
+// Expose pure helpers on window/global so they're reachable from Node tests
+// (in the browser, top-level function declarations are already on window).
+if (typeof window !== 'undefined') {
+  window.sortProjects = sortProjects;
+  window.wouldReorder = wouldReorder;
+}
+
 // ─── Column 1: Projects ──────────────────────────
 
 function renderProjects() {

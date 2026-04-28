@@ -335,6 +335,8 @@
 <script src="/js/resize.js"></script>
 <script src="/js/websocket.js"></script>
 <script>
+  const _sortSelect = document.getElementById('projectSortSelect');
+  if (_sortSelect) _sortSelect.value = State.projectSort;
   // ─── Init ──────────────────────────────────────
   connectWS();
   API.getPlatform().then(d => { State.platform = d; }).catch(() => {});
@@ -346,7 +348,7 @@
       if (btn) { btn.title = 'Copy SSH command'; btn.textContent = 'SSH'; }
     }
   }).catch(() => {});
-  API.getSessions().then(d => { State.sessions = d; renderProjects(); loadAllTaskCounts(); }).catch(err => handleApiError(err, 'init'));
+  API.getSessions().then(d => { State.sessions = d; rebuildProjectSnapshot(); renderProjects(); loadAllTaskCounts(); }).catch(err => handleApiError(err, 'init'));
   API.getAlerts().then(d => { State.alerts = d; renderAlerts(); }).catch(() => {});
   // Periodically refresh task counts to catch status changes from other sources
   setInterval(loadAllTaskCounts, 30000);

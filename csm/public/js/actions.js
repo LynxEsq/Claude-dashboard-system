@@ -789,6 +789,7 @@ async function deleteProject(name) {
     }
     const d = await API.getSessions();
     State.sessions = d;
+    rebuildProjectSnapshot();
     renderProjects();
     renderTerminal();
     el('wishList').innerHTML = '<div class="empty-msg">Select a project</div>';

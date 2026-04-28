@@ -140,6 +140,7 @@ module.exports = function (app, ctx) {
         execSync(`tmux send-keys -t "${target}" "claude --dangerously-skip-permissions" Enter`, { timeout: 5000 });
       } catch (e) { /* ignore */ }
     }, 1000);
+    // Bump on intent — deferred restart may fail silently, but the click is the activity signal.
     ctx.bumpActivity(req.params.name);
     res.json({ success: true });
   }));

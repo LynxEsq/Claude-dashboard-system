@@ -157,9 +157,9 @@ function renderProjects() {
   if (ind) ind.style.display = State.hasNewActivity ? '' : 'none';
 
   // Filter snapshot.
-  const filter = State.projectFilter.trim().toLowerCase();
+  const filter = State.projectFilter.trim().toLocaleLowerCase();
   const visible = filter
-    ? State.projectListSnapshot.filter(name => name.toLowerCase().includes(filter))
+    ? State.projectListSnapshot.filter(name => name.toLocaleLowerCase().includes(filter))
     : State.projectListSnapshot;
 
   if (visible.length === 0) {
@@ -185,11 +185,7 @@ function renderProjects() {
 
     const tc = State.taskCounts[name];
     const hasRunningTasks = tc && tc.running > 0;
-    const hasPendingWork = tc && (tc.pending > 0 || tc.running > 0 || (tc.merge_pending || 0) > 0);
-    const allDone = tc && tc.total > 0 && tc.completed === tc.total;
-    const statusDotClass = hasRunningTasks ? 'working'
-      : hasPendingWork ? s.status
-      : s.status;
+    const statusDotClass = hasRunningTasks ? 'working' : s.status;
 
     let progressHtml = '';
     if (tc && tc.total > 0) {

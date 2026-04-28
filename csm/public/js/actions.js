@@ -1708,7 +1708,8 @@ function onProjectFilterInput(e) {
 
 function onProjectSortChange(value) {
   State.projectSort = value;
-  try { localStorage.setItem('csm.projectSort', value); } catch {}
+  try { localStorage.setItem('csm.projectSort', value); }
+  catch (e) { console.warn('csm: failed to persist projectSort:', e); }
   rebuildProjectSnapshot();
   renderProjects();
 }

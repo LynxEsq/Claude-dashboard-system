@@ -1029,3 +1029,56 @@ mark.term-match.current { background: rgba(210,153,34,0.7); }
 .term-link:hover { text-decoration-style: solid; }
 .term-file-link { color: #bc8cff; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
 .term-file-link:hover { text-decoration-style: solid; color: var(--blue); }
+
+/* ─── Project list toolbar (filter + sort) ──────────── */
+
+.project-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.project-filter-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.project-filter-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+.project-filter-input::placeholder { color: var(--text2); }
+
+.project-sort-select {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.activity-indicator {
+  background: transparent;
+  border: none;
+  color: var(--blue);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  animation: csm-pulse 1.6s ease-in-out infinite;
+}
+@keyframes csm-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}

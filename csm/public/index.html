@@ -45,6 +45,28 @@
       Projects
       <button class="btn sm primary" onclick="showModal('create')">+</button>
     </div>
+    <div class="project-list-toolbar">
+      <input
+        type="text"
+        id="projectFilter"
+        class="project-filter-input"
+        placeholder="Filter projects..."
+        oninput="onProjectFilterInput(event)">
+      <button
+        id="activityIndicator"
+        class="activity-indicator"
+        title="New activity — click to re-sort"
+        onclick="onActivityIndicatorClick()"
+        style="display:none">●</button>
+      <select
+        id="projectSortSelect"
+        class="project-sort-select"
+        onchange="onProjectSortChange(this.value)">
+        <option value="activity">Recent</option>
+        <option value="added">Added</option>
+        <option value="name">Name</option>
+      </select>
+    </div>
     <div class="col-body" id="projectList">
       <div class="empty-msg">No projects yet</div>
     </div>

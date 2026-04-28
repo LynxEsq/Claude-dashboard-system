@@ -1697,3 +1697,22 @@ function termSearchNav(direction) {
   matches[State._termSearchIdx]?.classList.add('current');
   matches[State._termSearchIdx]?.scrollIntoView({ block: 'center' });
 }
+
+// ─── Project list filter / sort ──────────────────────
+
+function onProjectFilterInput(e) {
+  State.projectFilter = e.target.value;
+  renderProjects();
+}
+
+function onProjectSortChange(value) {
+  State.projectSort = value;
+  try { localStorage.setItem('csm.projectSort', value); } catch {}
+  rebuildProjectSnapshot();
+  renderProjects();
+}
+
+function onActivityIndicatorClick() {
+  rebuildProjectSnapshot();
+  renderProjects();
+}

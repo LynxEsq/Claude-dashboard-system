@@ -119,11 +119,17 @@ function wouldReorder(name, newTs, snapshot, sessions) {
   return false;
 }
 
+function rebuildProjectSnapshot() {
+  State.projectListSnapshot = sortProjects(State.sessions, State.projectSort);
+  State.hasNewActivity = false;
+}
+
 // Expose pure helpers on window/global so they're reachable from Node tests
 // (in the browser, top-level function declarations are already on window).
 if (typeof window !== 'undefined') {
   window.sortProjects = sortProjects;
   window.wouldReorder = wouldReorder;
+  window.rebuildProjectSnapshot = rebuildProjectSnapshot;
 }
 
 // ─── Column 1: Projects ──────────────────────────
@@ -138,15 +144,36 @@ function renderProjects() {
     return;
   }
 
-  const names = Object.keys(State.sessions);
+  // Lazy snapshot init.
+  if (
+    State.projectListSnapshot.length === 0 &&
+    Object.keys(State.sessions).length > 0
+  ) {
+    rebuildProjectSnapshot();
+  }
 
-  if (names.length === 0) {
-    list.innerHTML = '<div class="empty-msg">No projects yet.<br>Click + to create one.</div>';
+  // Toggle activity indicator.
+  const ind = el('activityIndicator');
+  if (ind) ind.style.display = State.hasNewActivity ? '' : 'none';
+
+  // Filter snapshot.
+  const filter = State.projectFilter.trim().toLowerCase();
+  const visible = filter
+    ? State.projectListSnapshot.filter(name => name.toLowerCase().includes(filter))
+    : State.projectListSnapshot;
+
+  if (visible.length === 0) {
+    if (Object.keys(State.sessions).length === 0) {
+      list.innerHTML = '<div class="empty-msg">No projects yet.<br>Click + to create one.</div>';
+    } else {
+      list.innerHTML = '<div class="empty-msg">No projects match the filter.</div>';
+    }
     return;
   }
 
-  list.innerHTML = names.map(name => {
+  list.innerHTML = visible.map(name => {
     const s = State.sessions[name];
+    if (!s) return '';   // snapshot may briefly hold a removed name; skip silently
     const active = State.selected === name ? 'active' : '';
     let tokenHtml = '';
     if (s.tokens?.percentage != null) {
@@ -156,15 +183,13 @@ function renderProjects() {
     const planning = State.planningProjects.has(name);
     const planDot = planning ? '<div class="planning-dot" title="AI Planning in progress"></div>' : '';
 
-    // Task progress bar
     const tc = State.taskCounts[name];
     const hasRunningTasks = tc && tc.running > 0;
     const hasPendingWork = tc && (tc.pending > 0 || tc.running > 0 || (tc.merge_pending || 0) > 0);
     const allDone = tc && tc.total > 0 && tc.completed === tc.total;
-    // Green if tasks running, blue only if all done AND there was recent active work, otherwise session status
     const statusDotClass = hasRunningTasks ? 'working'
       : hasPendingWork ? s.status
-      : s.status;  // all-done no longer overrides — use tmux session status
+      : s.status;
 
     let progressHtml = '';
     if (tc && tc.total > 0) {

@@ -11,6 +11,7 @@ class SessionMonitor extends EventEmitter {
     this.sessions = new Map();   // name -> session state
     this.interval = null;
     this.alertTimers = new Map(); // name -> { needsInputSince, idleSince }
+    this.activity = {};           // name -> { lastActivityAt, addedAt }
   }
 
   start() {
@@ -30,6 +31,9 @@ class SessionMonitor extends EventEmitter {
         statusSince: new Date(),
       });
     }
+
+    // Load activity timestamps from DB.
+    this.activity = history.getActivityMap();
 
     this.poll(); // immediate first poll
     this.interval = setInterval(() => this.poll(), this.pollInterval);
@@ -72,6 +76,9 @@ class SessionMonitor extends EventEmitter {
         this.alertTimers.delete(name);
       }
     }
+
+    // Refresh activity map (new sessions may have been backfilled / bumped on creation).
+    this.activity = history.getActivityMap();
   }
 
   poll() {
@@ -223,13 +230,25 @@ class SessionMonitor extends EventEmitter {
   getState() {
     const state = {};
     for (const [name, session] of this.sessions) {
-      state[name] = { ...session };
+      const a = this.activity[name];
+      state[name] = {
+        ...session,
+        lastActivityAt: a?.lastActivityAt ?? null,
+        addedAt: a?.addedAt ?? null,
+      };
     }
     return state;
   }
 
   getSessionState(name) {
-    return this.sessions.get(name) || null;
+    const session = this.sessions.get(name);
+    if (!session) return null;
+    const a = this.activity[name];
+    return {
+      ...session,
+      lastActivityAt: a?.lastActivityAt ?? null,
+      addedAt: a?.addedAt ?? null,
+    };
   }
 
   sendInput(name, input) {
@@ -242,6 +261,15 @@ class SessionMonitor extends EventEmitter {
     const session = this.sessions.get(name);
     if (!session) return false;
     return tmux.switchTo(session.tmuxSession, session.tmuxWindow, session.tmuxPane);
+  }
+
+  setActivity(name, ts) {
+    const cur = this.activity[name];
+    if (cur) {
+      cur.lastActivityAt = ts;
+    } else {
+      this.activity[name] = { lastActivityAt: ts, addedAt: ts };
+    }
   }
 }
 

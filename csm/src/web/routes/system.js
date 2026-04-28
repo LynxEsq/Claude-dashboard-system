@@ -51,11 +51,13 @@ module.exports = function (app, ctx) {
     }
     config.addSession(name, tmuxSession, { tmuxWindow, tmuxPane, projectPath });
     ctx.monitor?.reload();
+    ctx.bumpActivity(name);
     res.json({ success: true });
   }));
 
   app.delete('/api/config/session/:name', safe((req, res) => {
     config.removeSession(req.params.name);
+    history.deleteActivity(req.params.name);
     ctx.monitor?.reload();
     res.json({ success: true });
   }));

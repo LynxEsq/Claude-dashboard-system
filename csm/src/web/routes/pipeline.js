@@ -25,6 +25,7 @@ module.exports = function (app, ctx) {
     const { content } = req.body;
     if (!content) return res.status(400).json({ error: 'content is required' });
     const id = pipeline.addWish(req.params.name, content);
+    ctx.bumpActivity(req.params.name);
     broadcast(wss, { type: 'wishAdded', data: { sessionName: req.params.name, id, content } });
     res.json({ success: true, id });
   }));
@@ -51,6 +52,7 @@ module.exports = function (app, ctx) {
     const { title, description, wishIds, priority, blocked_by } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required' });
     const id = pipeline.createTask(req.params.name, title, description || '', wishIds || [], priority || 0);
+    ctx.bumpActivity(req.params.name);
     if (blocked_by && Array.isArray(blocked_by) && blocked_by.length > 0) {
       pipeline.saveTaskDependencies(id, blocked_by);
     }
@@ -99,6 +101,7 @@ module.exports = function (app, ctx) {
   app.post('/api/pipeline/:name/plan', safe((req, res) => {
     const result = pipeline.planTasks(req.params.name);
     if (result.planned) {
+      ctx.bumpActivity(req.params.name);
       broadcast(wss, { type: 'planStarted', data: { sessionName: req.params.name, tmuxSession: result.tmuxSession, wishIds: result.wishIds } });
     }
     res.json(result);
@@ -117,6 +120,7 @@ module.exports = function (app, ctx) {
     const wishIds = Array.isArray(req.body.wishIds) ? req.body.wishIds : [];
     const result = pipeline.applyPlan(req.params.name, tasksJson, wishIds);
     if (result.success) {
+      ctx.bumpActivity(req.params.name);
       const tasks = pipeline.getTasks(req.params.name);
       broadcast(wss, { type: 'planApplied', data: { sessionName: req.params.name, ...result, tasks } });
     }
@@ -130,6 +134,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeTaskInteractive(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));
@@ -139,6 +144,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeTaskSilent(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));
@@ -161,6 +167,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeNextTask(req.params.name);
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));
@@ -177,6 +184,7 @@ module.exports = function (app, ctx) {
     const resolveAction = action || 'merge';
 
     const result = pipeline.resolveTaskMerge(taskId, resolveAction);
+    ctx.bumpActivity(req.params.name);
 
     if (result.success && result.merged) {
       broadcast(wss, { type: 'taskMerged', data: { sessionName: req.params.name, taskId } });

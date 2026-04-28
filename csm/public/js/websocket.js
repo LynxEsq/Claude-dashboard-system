@@ -8,19 +8,39 @@ function handleMessage(msg) {
       case 'state':
         State.sessions = msg.data;
         State.loading = false;
+        rebuildProjectSnapshot();
         renderProjects();
         loadAllTaskCounts();
         break;
 
-      case 'update':
+      case 'update': {
+        const wasInSnapshot = State.projectListSnapshot.includes(msg.data.name);
         State.sessions[msg.data.name] = msg.data.session;
+        // New session appearing → rebuild so it shows up under current sort.
+        if (!wasInSnapshot) rebuildProjectSnapshot();
         renderProjects();
         if (State.selected === msg.data.name) renderTerminal();
         break;
+      }
 
       case 'statusChange':
         renderProjects();
         break;
+
+      case 'activityBump': {
+        const { name, lastActivityAt } = msg.data;
+        if (State.sessions[name]) {
+          State.sessions[name].lastActivityAt = lastActivityAt;
+        }
+        if (
+          State.projectSort === 'activity' &&
+          wouldReorder(name, lastActivityAt, State.projectListSnapshot, State.sessions)
+        ) {
+          State.hasNewActivity = true;
+        }
+        renderProjects();
+        break;
+      }
 
       case 'alerts':
         State.alerts = msg.data;

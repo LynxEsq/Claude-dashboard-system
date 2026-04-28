@@ -76,6 +76,62 @@ function handleApiError(err, context) {
   }
 }
 
+// ─── Pure helpers (unit-testable) ────────────────
+
+function sortProjects(sessions, mode) {
+  const names = Object.keys(sessions);
+  const sorted = [...names];
+  switch (mode) {
+    case 'name':
+      sorted.sort((a, b) => a.localeCompare(b));
+      break;
+    case 'added':
+      sorted.sort((a, b) => {
+        const ax = sessions[a].addedAt;
+        const bx = sessions[b].addedAt;
+        if (ax == null && bx == null) return a.localeCompare(b);
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return bx - ax;
+      });
+      break;
+    case 'activity':
+    default:
+      sorted.sort((a, b) => {
+        const ax = sessions[a].lastActivityAt;
+        const bx = sessions[b].lastActivityAt;
+        if (ax == null && bx == null) return a.localeCompare(b);
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return bx - ax;
+      });
+  }
+  return sorted;
+}
+
+function wouldReorder(name, newTs, snapshot, sessions) {
+  const idx = snapshot.indexOf(name);
+  if (idx <= 0) return false;  // not in list, or already on top
+  for (let i = 0; i < idx; i++) {
+    const otherTs = sessions[snapshot[i]]?.lastActivityAt ?? 0;
+    if (otherTs < newTs) return true;
+  }
+  return false;
+}
+
+function rebuildProjectSnapshot() {
+  State.projectListSnapshot = sortProjects(State.sessions, State.projectSort);
+  State.hasNewActivity = false;
+}
+
+// Expose pure helpers on window/global so they're reachable from Node tests
+// (in the browser, top-level function declarations are already on window).
+if (typeof window !== 'undefined') {
+  window.sortProjects = sortProjects;
+  window.wouldReorder = wouldReorder;
+  window.rebuildProjectSnapshot = rebuildProjectSnapshot;
+}
+
 // ─── Column 1: Projects ──────────────────────────
 
 function renderProjects() {
@@ -88,15 +144,36 @@ function renderProjects() {
     return;
   }
 
-  const names = Object.keys(State.sessions);
+  // Lazy snapshot init.
+  if (
+    State.projectListSnapshot.length === 0 &&
+    Object.keys(State.sessions).length > 0
+  ) {
+    rebuildProjectSnapshot();
+  }
 
-  if (names.length === 0) {
-    list.innerHTML = '<div class="empty-msg">No projects yet.<br>Click + to create one.</div>';
+  // Toggle activity indicator.
+  const ind = el('activityIndicator');
+  if (ind) ind.style.display = State.hasNewActivity ? '' : 'none';
+
+  // Filter snapshot.
+  const filter = State.projectFilter.trim().toLocaleLowerCase();
+  const visible = filter
+    ? State.projectListSnapshot.filter(name => name.toLocaleLowerCase().includes(filter))
+    : State.projectListSnapshot;
+
+  if (visible.length === 0) {
+    if (Object.keys(State.sessions).length === 0) {
+      list.innerHTML = '<div class="empty-msg">No projects yet.<br>Click + to create one.</div>';
+    } else {
+      list.innerHTML = '<div class="empty-msg">No projects match the filter.</div>';
+    }
     return;
   }
 
-  list.innerHTML = names.map(name => {
+  list.innerHTML = visible.map(name => {
     const s = State.sessions[name];
+    if (!s) return '';   // snapshot may briefly hold a removed name; skip silently
     const active = State.selected === name ? 'active' : '';
     let tokenHtml = '';
     if (s.tokens?.percentage != null) {
@@ -106,15 +183,9 @@ function renderProjects() {
     const planning = State.planningProjects.has(name);
     const planDot = planning ? '<div class="planning-dot" title="AI Planning in progress"></div>' : '';
 
-    // Task progress bar
     const tc = State.taskCounts[name];
     const hasRunningTasks = tc && tc.running > 0;
-    const hasPendingWork = tc && (tc.pending > 0 || tc.running > 0 || (tc.merge_pending || 0) > 0);
-    const allDone = tc && tc.total > 0 && tc.completed === tc.total;
-    // Green if tasks running, blue only if all done AND there was recent active work, otherwise session status
-    const statusDotClass = hasRunningTasks ? 'working'
-      : hasPendingWork ? s.status
-      : s.status;  // all-done no longer overrides — use tmux session status
+    const statusDotClass = hasRunningTasks ? 'working' : s.status;
 
     let progressHtml = '';
     if (tc && tc.total > 0) {

@@ -24,6 +24,11 @@ const State = {
   platform: { platform: 'unknown', name: 'Unknown', terminal: 'Terminal' },
   isRemote: false,
   sshInfo: { user: '', host: '' },
+  // Project list filter / sort
+  projectFilter: '',
+  projectSort: (typeof localStorage !== 'undefined' && localStorage.getItem('csm.projectSort')) || 'activity',
+  projectListSnapshot: [],
+  hasNewActivity: false,
 };
 
 // Task status order for sorting (merge_pending between running and completed)

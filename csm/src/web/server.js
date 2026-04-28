@@ -38,7 +38,29 @@ function start(port = 9847, autoOpen = true, host) {
 
   // ─── Route modules ──────────────────────────────────
 
+  // Backfill session_activity for any sessions in config without a row.
+  // First-in-array sessions get the oldest synthesized timestamps.
+  {
+    const sessions = config.listSessions();
+    const map = history.getActivityMap();
+    const now = Date.now();
+    sessions.forEach((s, i) => {
+      if (!map[s.name]) {
+        const synthetic = now - (sessions.length - i) * 1000;
+        history.ensureActivityRow(s.name, synthetic);
+      }
+    });
+  }
+
   const ctx = { monitor: null, wss, pipeline, broadcast, config, tmux, history, platform };
+
+  // Helper: bump activity → DB + monitor cache + WS broadcast. Single source of truth.
+  ctx.bumpActivity = (name) => {
+    if (!name) return;
+    const ts = history.bumpActivity(name);
+    if (ctx.monitor) ctx.monitor.setActivity(name, ts);
+    broadcast(wss, { type: 'activityBump', data: { name, lastActivityAt: ts } });
+  };
 
   require('./routes/sessions')(app, ctx);
   require('./routes/pipeline')(app, ctx);

@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const { safe } = require('../middleware');
 
 module.exports = function (app, ctx) {
-  const { config, tmux, pipeline, platform, broadcast, wss } = ctx;
+  const { config, tmux, pipeline, platform, broadcast, wss, history } = ctx;
 
   app.get('/api/sessions', safe((req, res) => {
     res.json(ctx.monitor ? ctx.monitor.getState() : {});
@@ -18,6 +18,7 @@ module.exports = function (app, ctx) {
     const { input } = req.body;
     if (!input) return res.status(400).json({ error: 'No input provided' });
     const ok = ctx.monitor?.sendInput(req.params.name, input);
+    if (ok) ctx.bumpActivity(req.params.name);
     res.json({ success: ok });
   }));
 
@@ -35,6 +36,7 @@ module.exports = function (app, ctx) {
       return res.status(404).json({ error: 'No active session for this task' });
     }
     const ok = tmux.sendKeys(mapping.tmux_session_name, null, null, input);
+    if (ok && mapping.session_name) ctx.bumpActivity(mapping.session_name);
     res.json({ success: ok });
   }));
 
@@ -58,6 +60,7 @@ module.exports = function (app, ctx) {
     }
     try {
       execSync(`tmux send-keys -t "${mapping.tmux_session_name}" ${keys}`, { timeout: 5000 });
+      if (mapping.session_name) ctx.bumpActivity(mapping.session_name);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -77,6 +80,7 @@ module.exports = function (app, ctx) {
 
     config.addSession(name, tmuxName, { projectPath: projectPath || null });
     ctx.monitor?.reload();
+    ctx.bumpActivity(name);
     res.json({ success: true, tmuxSession: tmuxName });
   }));
 
@@ -87,6 +91,7 @@ module.exports = function (app, ctx) {
 
     tmux.killSession(sess.tmuxSession);
     config.removeSession(req.params.name);
+    history.deleteActivity(req.params.name);
     ctx.monitor?.reload();
     res.json({ success: true });
   }));
@@ -112,6 +117,7 @@ module.exports = function (app, ctx) {
 
     // Remove from config
     config.removeSession(name);
+    history.deleteActivity(name);
 
     // Clean pipeline DB (wishes + tasks)
     try {
@@ -134,6 +140,8 @@ module.exports = function (app, ctx) {
         execSync(`tmux send-keys -t "${target}" "claude --dangerously-skip-permissions" Enter`, { timeout: 5000 });
       } catch (e) { /* ignore */ }
     }, 1000);
+    // Bump on intent — deferred restart may fail silently, but the click is the activity signal.
+    ctx.bumpActivity(req.params.name);
     res.json({ success: true });
   }));
 
@@ -152,6 +160,7 @@ module.exports = function (app, ctx) {
     }
 
     ctx.monitor?.reload();
+    ctx.bumpActivity(req.params.name);
     res.json({ success: true });
   }));
 
@@ -169,6 +178,7 @@ module.exports = function (app, ctx) {
 
     try {
       execSync(`tmux send-keys -t "${target}" ${keys}`, { timeout: 5000 });
+      ctx.bumpActivity(req.params.name);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -189,6 +199,7 @@ module.exports = function (app, ctx) {
 
     try {
       platform.openTerminalAttach(tmuxName);
+      ctx.bumpActivity(req.params.name);
       res.json({ success: true });
     } catch (err) {
       console.error(`[Terminal] Failed:`, err.message);

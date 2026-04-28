@@ -789,6 +789,7 @@ async function deleteProject(name) {
     }
     const d = await API.getSessions();
     State.sessions = d;
+    rebuildProjectSnapshot();
     renderProjects();
     renderTerminal();
     el('wishList').innerHTML = '<div class="empty-msg">Select a project</div>';
@@ -1696,4 +1697,24 @@ function termSearchNav(direction) {
   State._termSearchIdx = (State._termSearchIdx + direction + matches.length) % matches.length;
   matches[State._termSearchIdx]?.classList.add('current');
   matches[State._termSearchIdx]?.scrollIntoView({ block: 'center' });
+}
+
+// ─── Project list filter / sort ──────────────────────
+
+function onProjectFilterInput(e) {
+  State.projectFilter = e.target.value;
+  renderProjects();
+}
+
+function onProjectSortChange(value) {
+  State.projectSort = value;
+  try { localStorage.setItem('csm.projectSort', value); }
+  catch (e) { console.warn('csm: failed to persist projectSort:', e); }
+  rebuildProjectSnapshot();
+  renderProjects();
+}
+
+function onActivityIndicatorClick() {
+  rebuildProjectSnapshot();
+  renderProjects();
 }

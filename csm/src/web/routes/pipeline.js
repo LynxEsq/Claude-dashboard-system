@@ -25,6 +25,7 @@ module.exports = function (app, ctx) {
     const { content } = req.body;
     if (!content) return res.status(400).json({ error: 'content is required' });
     const id = pipeline.addWish(req.params.name, content);
+    ctx.bumpActivity(req.params.name);
     broadcast(wss, { type: 'wishAdded', data: { sessionName: req.params.name, id, content } });
     res.json({ success: true, id });
   }));
@@ -130,6 +131,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeTaskInteractive(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));
@@ -139,6 +141,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeTaskSilent(req.params.name, taskId, { noWorktree });
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));
@@ -161,6 +164,7 @@ module.exports = function (app, ctx) {
     const result = pipeline.executeNextTask(req.params.name);
     if (result.started) {
       broadcast(wss, { type: 'taskStarted', data: { sessionName: req.params.name, ...result } });
+      ctx.bumpActivity(req.params.name);
     }
     res.json(result);
   }));

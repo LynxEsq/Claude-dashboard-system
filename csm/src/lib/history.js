@@ -38,6 +38,12 @@ function initTables() {
       timestamp DATETIME DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS session_activity (
+      session_name TEXT PRIMARY KEY,
+      last_activity_at INTEGER NOT NULL,
+      added_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_status_log_session
       ON status_log(session_name, timestamp);
     CREATE INDEX IF NOT EXISTS idx_token_snapshots_session
@@ -127,6 +133,41 @@ function close() {
   }
 }
 
+function bumpActivity(sessionName) {
+  const now = Date.now();
+  getDb().prepare(`
+    INSERT INTO session_activity (session_name, last_activity_at, added_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(session_name) DO UPDATE SET last_activity_at = excluded.last_activity_at
+  `).run(sessionName, now, now);
+  return now;
+}
+
+function ensureActivityRow(sessionName, addedAt) {
+  getDb().prepare(`
+    INSERT OR IGNORE INTO session_activity (session_name, last_activity_at, added_at)
+    VALUES (?, ?, ?)
+  `).run(sessionName, addedAt, addedAt);
+}
+
+function getActivityMap() {
+  const rows = getDb().prepare(
+    'SELECT session_name, last_activity_at, added_at FROM session_activity'
+  ).all();
+  const map = {};
+  for (const r of rows) {
+    map[r.session_name] = {
+      lastActivityAt: r.last_activity_at,
+      addedAt: r.added_at,
+    };
+  }
+  return map;
+}
+
+function deleteActivity(sessionName) {
+  getDb().prepare('DELETE FROM session_activity WHERE session_name = ?').run(sessionName);
+}
+
 module.exports = {
   logStatus,
   logTokenSnapshot,
@@ -139,4 +180,8 @@ module.exports = {
   getSessionTimeline,
   cleanup,
   close,
+  bumpActivity,
+  ensureActivityRow,
+  getActivityMap,
+  deleteActivity,
 };
